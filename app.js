@@ -1,8 +1,6 @@
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.getRegistrations().then(registrations => {
-    for (let registration of registrations) {
-      registration.unregister();
-    }
+    for (let registration of registrations) registration.unregister();
   });
 }
 if ('caches' in window) {
@@ -25,29 +23,27 @@ if (!firebase.apps.length) {
 }
 const firestore = firebase.firestore();
 
-const SESSION_KEY = "controle_sessao_proati_v11";
-const USER_CACHE_KEY = "controle_user_data_v11";
-
-const AVARIAS_INICIAIS = [
-  "SA3", "SA4", "SA10", "SA12", "SA29", "SA33", "SA34",
-  "PV1", "PV3", "PV5", "PV9",
-  "PN9"
-];
+const SESSION_KEY = "controle_sessao_proati_v35";
+const USER_CACHE_KEY = "controle_user_data_v35";
 
 const MODELOS_EQUIPAMENTO = [
   { id: "M", label: "M (Multilaser)" },
   { id: "SA", label: "SA (Samsung)" },
-  { id: "PV", label: "PV (Positivo Velho)" },
-  { id: "PN", label: "PN (Positivo Novo)" },
-  { id: "TAB", label: "TAB (Tablet - 11 unid.)" }
+  { id: "PV", label: "PV (Positivo V.)" },
+  { id: "PN", label: "PN (Positivo N.)" },
+  { id: "TAB", label: "TAB (Tablet)" }
 ];
 
 let deferredPrompt = null;
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
   deferredPrompt = e;
-  if (user && !localStorage.getItem("pwa_tutorial_v1")) {
-    modalPWAInstalacao();
+});
+
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    const modals = document.querySelectorAll('.modal');
+    if (modals.length > 0) modals[modals.length - 1].remove();
   }
 });
 
@@ -73,20 +69,19 @@ const TABELAS_HORARIOS = {
 };
 
 const FINALIDADES = [
-  { id: "redacao", label: "✍️ Redação", priority: 1 },
-  { id: "programacao", label: "💻 Programação", priority: 1 },
-  { id: "speak", label: "🇬🇧 Speak (Inglês)", priority: 1 },
-  { id: "matific", label: "📐 Matific (Matemática)", priority: 1 },
-  { id: "sem_plataforma", label: "📚 Professor sem Plataforma", priority: 2 },
-  { id: "outros", label: "📌 Outros", priority: 3 }
+  { id: "redacao", label: "Redação" },
+  { id: "programacao", label: "Programação" },
+  { id: "speak", label: "Speak (Inglês)" },
+  { id: "matific", label: "Matific (Matemática)" },
+  { id: "sem_plataforma", label: "Sem Plataforma" },
+  { id: "outros", label: "Outros" }
 ];
 
 const FERIADOS_FIXOS = ["01-01", "04-21", "05-01", "09-07", "10-12", "11-02", "11-15", "11-20", "12-25"];
 
-let db = { users: [], machines: [], reservas: [], bloqueios: [], emprestimos: [], transferencias: [], reports: [] };
+let db = { users: [], machines: [], reservas: [], bloqueios: [], emprestimos: [], transferencias: [], reports: [], devolucoes: [] };
 let user = null;
 let currentPage = "dashboard";
-const transferenciasExibidas = new Set();
 
 const hojeData = new Date();
 let calYear = hojeData.getFullYear();
@@ -95,23 +90,17 @@ let calMonth = hojeData.getMonth();
 const $ = id => document.getElementById(id);
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2);
 const esc = x => String(x ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const pill = s => `<span class="pill ${s}">${({ available: "Disponível", reserved: "Reservado", use: "Em uso", maintenance: "Avaria" }[s] || s)}</span>`;
 
-function timeToMin(timeStr) {
-  if (!timeStr) return 0;
-  const [h, m] = timeStr.split(":").map(Number);
-  return h * 60 + m;
-}
-
-function horariosConflitam(startA, endA, startB, endB) {
-  return Math.max(timeToMin(startA), timeToMin(startB)) < Math.min(timeToMin(endA), timeToMin(endB));
-}
-
-document.addEventListener("input", e => {
-  if (e.target && ["loginPass", "up", "eup", "paSenha"].includes(e.target.id)) {
-    e.target.value = e.target.value.replace(/\D/g, "").slice(0, 4);
-  }
-});
+const menus = [
+  ["dashboard", "Dashboard"],
+  ["calendario", "Calendário"],
+  ["solicitacoes", "Solicitações & Reservas"],
+  ["devolucoes", "Histórico Devoluções"],
+  ["avarias", "Avarias"],
+  ["bloqueios", "Bloqueios"],
+  ["usuarios", "Usuários"],
+  ["tutorial", "❓ Tutorial"]
+];
 
 function nowFormatted() {
   const d = new Date();
@@ -123,14 +112,48 @@ function nowFormatted() {
   return `${dia}/${mes}/${ano} às ${hora}:${min}`;
 }
 
+function obterIndiceAulaAtual() {
+  const agora = new Date();
+  const mins = agora.getHours() * 60 + agora.getMinutes();
+  const tabela = TABELAS_HORARIOS["6_7"];
+
+  for (let i = 0; i < tabela.length; i++) {
+    const [hIni, mIni] = tabela[i].start.split(":").map(Number);
+    const [hFim, mFim] = tabela[i].end.split(":").map(Number);
+    const iniMins = hIni * 60 + mIni;
+    const fimMins = hFim * 60 + mFim;
+
+    if (mins >= iniMins && mins <= fimMins) return i;
+  }
+  return 0;
+}
+
+function ordenarEquipamentos(listaEq) {
+  const ordemPrefixo = { "M": 1, "PN": 2, "PV": 3, "SA": 4, "TAB": 5 };
+
+  return listaEq.sort((a, b) => {
+    const matchA = a.match(/^([A-Z]+)(\d+)?/i);
+    const matchB = b.match(/^([A-Z]+)(\d+)?/i);
+
+    const prefA = matchA ? matchA[1].toUpperCase() : a;
+    const prefB = matchB ? matchB[1].toUpperCase() : b;
+
+    const numA = matchA && matchA[2] ? parseInt(matchA[2], 10) : 0;
+    const numB = matchB && matchB[2] ? parseInt(matchB[2], 10) : 0;
+
+    const pesoA = ordemPrefixo[prefA] || 99;
+    const pesoB = ordemPrefixo[prefB] || 99;
+
+    if (pesoA !== pesoB) return pesoA - pesoB;
+    return numA - numB;
+  });
+}
+
 function escutarColecao(colecao, chaveDb) {
   firestore.collection(colecao).onSnapshot(snapshot => {
     db[chaveDb] = snapshot.docs.map(doc => ({ idDoc: doc.id, ...doc.data() }));
-    if (user) {
-      verificarTransferenciasPendentes();
-      if (typeof window[currentPage] === 'function') {
-        window[currentPage]();
-      }
+    if (user && typeof window[currentPage] === 'function') {
+      window[currentPage]();
     }
   });
 }
@@ -143,71 +166,28 @@ function inicializarBancoEmNuvem() {
   escutarColecao("emprestimos", "emprestimos");
   escutarColecao("transferencias", "transferencias");
   escutarColecao("reports", "reports");
-
-  firestore.collection("users").get().then(snap => {
-    if (snap.empty) {
-      firestore.collection("users").add({ id: "adm", name: "Administrador", userLogin: "adm", pass: "1703", role: "admin" });
-      firestore.collection("users").add({ id: "demo", name: "Professor Exemplo", userLogin: "prof", pass: "0001", role: "professor" });
-    }
-  });
+  escutarColecao("devolucoes", "devolucoes");
 }
-
 inicializarBancoEmNuvem();
 
 const isPastDate = d => d < new Date().toISOString().split("T")[0];
 const isWeekend = d => [0, 6].includes(new Date(d + "T00:00:00").getDay());
 const isHoliday = d => FERIADOS_FIXOS.includes(d.slice(5));
 
-const availInLessons = (d, selectedIndices, t, targetSegment = "6_7", ignoreBatchId = null) => {
-  const tabelaTarget = TABELAS_HORARIOS[targetSegment] || TABELAS_HORARIOS["6_7"];
-  const selectedIntervals = selectedIndices.map(idx => tabelaTarget[idx]);
-
-  return db.machines.filter(m => {
-    if (m.type !== t || m.status === "maintenance") return false;
-
-    const blocked = db.bloqueios.some(b => {
-      if (b.date !== d) return false;
-      if (b.equipment !== "all" && b.equipment !== m.id) return false;
-      
-      if (b.lesson === "all") return true;
-      return selectedIndices.includes(parseInt(b.lesson, 10));
-    });
-
-    if (blocked) return false;
-
-    const temConflito = db.reservas.some(r => {
-      if (r.date !== d || r.equipment !== m.id || r.status === "confirmed") return false;
-      if ((r.batchId || r.id) === ignoreBatchId) return false;
-
-      const tabelaReserva = TABELAS_HORARIOS[r.segment || "6_7"] || TABELAS_HORARIOS["6_7"];
-      const slotReserva = tabelaReserva[r.lesson];
-      if (!slotReserva) return false;
-
-      return selectedIntervals.some(sel => horariosConflitam(sel.start, sel.end, slotReserva.start, slotReserva.end));
-    });
-
-    return !temConflito;
-  });
-};
-
 function verificarSessaoSalva() {
-  const savedDocId = localStorage.getItem(SESSION_KEY) || localStorage.getItem("controle_sessao_v10") || localStorage.getItem("controle_sessao_v9");
+  const savedDocId = localStorage.getItem(SESSION_KEY);
   const cachedUserData = localStorage.getItem(USER_CACHE_KEY);
 
   if (cachedUserData) {
     try {
       const u = JSON.parse(cachedUserData);
-      if (u && u.name) {
-        iniciarSessao(u);
-      }
+      if (u && u.name) iniciarSessao(u);
     } catch (e) {}
   }
 
   if (savedDocId) {
     firestore.collection("users").doc(savedDocId).get().then(doc => {
-      if (doc.exists) {
-        iniciarSessao({ idDoc: doc.id, ...doc.data() });
-      }
+      if (doc.exists) iniciarSessao({ idDoc: doc.id, ...doc.data() });
     }).catch(() => {});
   }
 }
@@ -226,1271 +206,915 @@ function iniciarSessao(u) {
   }
   $("login").classList.add("hidden");
   $("app").classList.remove("hidden");
-  $("who").textContent = u.name + " · " + (u.role === "admin" ? "Admin" : "Prof.");
-  
-  verificarTransferenciasPendentes();
+
+  $("who").innerHTML = `
+    <span><b>${esc(u.name)}</b> (${u.role === "admin" ? "Admin" : "Prof."})</span>
+    <button class="btn-sm" onclick="modalEditarMeuPerfil()">✏️ Perfil</button>
+    <button class="btn-sm danger" id="btnLogoutApp">🚪 Sair</button>
+  `;
+
+  $("btnLogoutApp").onclick = encerrarSessao;
   nav("dashboard");
 }
 
-function modalPWAInstalacao() {
-  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
-
-  const m = modal(`
-    <div class="modal-top">
-      <h2>📲 Adicionar Atalho do Sistema</h2>
-    </div>
-
-    <div class="notice danger-notice" style="margin-bottom:12px; font-size:13px; border-left:4px solid #ef4444; background:#fef2f2; padding:10px; border-radius:6px; color:#991b1b;">
-      ⚠️ <b>ATENÇÃO:</b> Utilize preferencialmente o navegador <b>GOOGLE CHROME</b>.<br>
-      ❌ Caso não esteja usando o Google Chrome, <b>consulte o PROATI!</b>
-    </div>
-    
-    ${deferredPrompt ? `
-      <div style="text-align:center; padding:10px 0;">
-        <button id="btnInstalarAuto" class="btn-primary" style="background:#10b981; font-size:15px; padding:12px; width:100%;">
-          ⚡ Criar Atalho na Tela Inicial
-        </button>
-      </div>
-    ` : isIOS ? `
-      <div style="font-size:13px; color:#334155;">
-        <p><b>No Safari:</b> Toque em <b>Compartilhar ⎘</b> > <b>Adicionar à Tela de Início</b>.</p>
-        <button class="btn-primary" style="margin-top:12px; width:100%;" onclick="concluirTutorialPWA()">
-          ✅ Continuar
-        </button>
-      </div>
-    ` : `
-      <div style="font-size:13px; color:#334155;">
-        <p><b>No Chrome:</b> Clique nos <b>3 pontinhos (⋮)</b> > <b>Instalar página como app...</b></p>
-        <button class="btn-primary" style="margin-top:12px; width:100%;" onclick="concluirTutorialPWA()">
-          ✅ Entendi
-        </button>
-      </div>
-    `}
-  `);
-
-  const btnAuto = document.getElementById("btnInstalarAuto");
-  if (btnAuto) {
-    btnAuto.onclick = async () => {
-      if (deferredPrompt) {
-        deferredPrompt.prompt();
-        const { outcome } = await deferredPrompt.userChoice;
-        if (outcome === 'accepted') concluirTutorialPWA();
-        deferredPrompt = null;
-      }
-    };
-  }
-}
-
-function concluirTutorialPWA() {
-  localStorage.setItem("pwa_tutorial_v1", "true");
-  document.querySelectorAll(".modal").forEach(m => m.remove());
-}
-
-function modalPrimeiroAcesso() {
-  const m = modal(`
-    <div class="modal-top">
-      <h2>🆕 Primeiro Acesso - Cadastro de Professor</h2>
-      <button class="close">&times;</button>
-    </div>
-    <form id="fPrimeiroAcesso">
-      <div class="notice" style="margin-bottom:12px; font-size:13px;">
-        Preencha os dados abaixo para criar sua conta de <b>Professor</b> no sistema.
-      </div>
-      <div class="form-grid">
-        <label>Nome Completo
-          <input id="paNome" placeholder="Ex: Maria Souza" required style="width:100%;">
-        </label>
-        <label>Usuário de Login
-          <input id="paLogin" placeholder="Ex: prof.maria" required style="width:100%;">
-        </label>
-        <label>Senha (Exatamente 4 números)
-          <input id="paSenha" type="password" maxlength="4" pattern="\\d{4}" placeholder="Ex: 1234" required style="width:100%;">
-        </label>
-      </div>
-      <button type="submit" class="btn-primary" style="margin-top:18px; width:100%">
-        ✅ Criar Minha Conta
-      </button>
-    </form>
-  `);
-
-  m.querySelector("#paSenha").addEventListener("input", e => {
-    e.target.value = e.target.value.replace(/\D/g, "").slice(0, 4);
-  });
-
-  m.querySelector(".close").onclick = () => m.remove();
-
-  m.querySelector("#fPrimeiroAcesso").onsubmit = async e => {
-    e.preventDefault();
-
-    const nome = $("paNome").value.trim();
-    const userLogin = $("paLogin").value.trim().toLowerCase();
-    const pass = $("paSenha").value.trim();
-
-    if (pass.length !== 4 || isNaN(pass)) {
-      return alert("A senha deve conter exatamente 4 números.");
-    }
-
-    const usuarioExistente = db.users.find(u => 
-      (u.userLogin && u.userLogin.toLowerCase() === userLogin) || 
-      u.name.toLowerCase() === nome.toLowerCase()
-    );
-
-    if (usuarioExistente) {
-      return alert("Este usuário ou nome já está cadastrado no sistema.");
-    }
-
-    try {
-      await firestore.collection("users").add({
-        id: uid(),
-        name: nome,
-        userLogin: userLogin,
-        pass: pass,
-        role: "professor",
-        createdAt: nowFormatted()
-      });
-
-      alert("Conta criada com sucesso! Você já pode fazer o login.");
-      
-      if ($("loginUser")) $("loginUser").value = userLogin;
-      if ($("loginPass")) $("loginPass").focus();
-
-      m.remove();
-    } catch (err) {
-      alert("Erro ao criar cadastro: " + err.message);
-    }
-  };
-}
-window.modalPrimeiroAcesso = modalPrimeiroAcesso;
-
-$("loginForm").addEventListener("submit", async e => {
-  e.preventDefault();
-  const entered = $("loginUser").value.trim().toLowerCase();
-  const pass = $("loginPass").value.trim();
-  
-  if (pass.length !== 4 || isNaN(pass)) {
-    return $("loginError").textContent = "A senha deve ter exatamente 4 dígitos numéricos.";
-  }
-
-  let u = db.users.find(x => 
-    (x.userLogin && x.userLogin.toLowerCase() === entered) || 
-    x.name.toLowerCase() === entered || 
-    (x.email && x.email.toLowerCase() === entered)
-  );
-  
-  if (!u) {
-    try {
-      const snap = await firestore.collection("users").get();
-      const allUsers = snap.docs.map(doc => ({ idDoc: doc.id, ...doc.data() }));
-      u = allUsers.find(x => 
-        (x.userLogin && x.userLogin.toLowerCase() === entered) || 
-        x.name.toLowerCase() === entered || 
-        (x.email && x.email.toLowerCase() === entered)
-      );
-    } catch (err) {}
-  }
-  
-  if (!u || u.pass !== pass) return $("loginError").textContent = "Usuário ou senha incorretos.";
-  iniciarSessao(u);
-});
-
-$("logout").onclick = () => {
+function encerrarSessao() {
   user = null;
   localStorage.removeItem(SESSION_KEY);
   localStorage.removeItem(USER_CACHE_KEY);
   $("app").classList.add("hidden");
   $("login").classList.remove("hidden");
-  $("loginForm").reset();
-  $("loginError").textContent = "";
-};
+}
 
-const menus = [
-  ["dashboard", "📊 Dashboard"],
-  ["calendario", "🗓️ Calendário"],
-  ["reservas", "📅 Reservas"],
-  ["solicitacoes", "🔔 Solicitações"],
-  ["avarias", "🛠️ Central Avarias"],
-  ["bloqueios", "🚫 Bloqueios"],
-  ["usuarios", "👥 Usuários"]
-];
+$("loginForm").addEventListener("submit", async e => {
+  e.preventDefault();
+  const entered = $("loginUser").value.trim().toLowerCase();
+  const pass = $("loginPass").value.trim();
 
-function nav(page) {
-  currentPage = page;
-  
-  const pendentesCount = db.emprestimos.filter(x => x.status === "aguardando").length;
-  const notifyBadge = pendentesCount > 0 ? `<span class="badge-notify">${pendentesCount}</span>` : '';
+  let u = db.users.find(x => 
+    (x.userLogin && x.userLogin.toLowerCase() === entered) || 
+    x.name.toLowerCase() === entered
+  );
 
-  $("nav").innerHTML = menus.filter(x => user.role === "admin" || !["bloqueios", "usuarios"].includes(x[0]))
-    .map(x => {
-      const isSol = x[0] === "solicitacoes";
-      const icon = x[1].split(' ')[0];
-      const title = x[1].substring(icon.length).trim();
-
-      return `<button class="${x[0] === page ? "active" : ""}" data-p="${x[0]}">
-        <span class="nav-icon">${icon}</span>
-        <span class="nav-label">${title}</span>
-        ${isSol ? notifyBadge : ''}
-      </button>`;
-    }).join("");
-
-  document.querySelectorAll("#nav button").forEach(b => b.onclick = () => nav(b.dataset.p));
-  if (typeof window[page] === 'function') {
-    window[page]();
+  if (!u || u.pass !== pass) {
+    return $("loginError").textContent = "Usuário ou senha incorretos.";
   }
-}
+  iniciarSessao(u);
+});
 
-function modalAgendamentoRapido() {
-  const d = new Date();
-  const dia = String(d.getDate()).padStart(2, '0');
-  const mes = String(d.getMonth() + 1).padStart(2, '0');
-  const ano = d.getFullYear();
-  const hoje = `${ano}-${mes}-${dia}`;
-  modalReserva(hoje);
-}
-window.modalAgendamentoRapido = modalAgendamentoRapido;
-
-function dashboard() {
-  const hoje = new Date().toISOString().split("T")[0];
-  const resHoje = db.reservas.filter(r => r.date === hoje && r.status === "confirmed");
-  const noteResHojeUnique = new Set(resHoje.filter(r => r.type === "notebook").map(r => r.equipment)).size;
-  const tabResHojeUnique = new Set(resHoje.filter(r => r.type === "tablet").map(r => r.equipment)).size;
-
-  const userRes = db.reservas.filter(r => r.userId === user.id && r.status === "confirmed");
-  const userBatchesCount = new Set(userRes.map(r => r.batchId || r.id)).size;
-  const empAtivos = new Set(db.emprestimos.filter(x => x.status === "retirado").map(x => x.equipment)).size;
-
-  $("main").innerHTML = `
-    <div class="head">
-      <div>
-        <h2>Painel Principal</h2>
-        <div class="muted">Escola Maria Olímpia de Souza Queiroz Maciel · Total: 157 máq. (146 Notebooks / 11 Tablets)</div>
-      </div>
-      <div style="display:flex; gap:8px; flex-wrap:wrap;">
-        <button class="ok" onclick="modalAgendamentoRapido()">⚡ Agendamento Rápido</button>
-        <button class="btn-primary" onclick="modalReserva()">+ Nova Reserva</button>
-        <button class="secondary" onclick="modalReportDefeito()">🛠️ Reportar Defeito</button>
-        ${user.role === "admin" ? `<button class="danger" onclick="encerrarEmprestimosApos1310()">⏰ Encerrar Empréstimos (13:10)</button>` : ''}
-      </div>
-    </div>
-
-    <div class="grid">
-      <div class="card stat">
-        <span>💻 Notebooks Agendados Hoje</span>
-        <b>${noteResHojeUnique} / 146 máq.</b>
-      </div>
-      <div class="card stat">
-        <span>📱 Tablets Agendados Hoje</span>
-        <b>${tabResHojeUnique} / 11 máq.</b>
-      </div>
-      <div class="card stat">
-        <span>📅 Seus Lotes de Reserva</span>
-        <b>${userBatchesCount}</b>
-      </div>
-      <div class="card stat">
-        <span>📦 Empréstimos Ativos</span>
-        <b>${empAtivos} máq.</b>
-      </div>
-    </div>
-
-    <div class="card section" style="margin-top:16px;">
-      <h3>🔴 Retiradas do Dia (${hoje.split('-').reverse().join('/')}) — Transparência Pública</h3>
-      ${usoTabela()}
-    </div>`;
-}
-
-function avarias() {
-  $("main").innerHTML = `
-    <div class="head">
-      <div>
-        <h2>🛠️ Central de Avarias e Busca de Equipamentos</h2>
-        <div class="muted">Pesquise qualquer máquina pelo ID/Nº de Série e consulte todo o histórico de reports.</div>
-      </div>
-      <button class="btn-primary" onclick="modalReportDefeito()">+ Reportar Novo Defeito</button>
-    </div>
-
-    <div class="card" style="margin-bottom:16px;">
-      <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
-        <input id="searchMachine" placeholder="🔍 Digite o ID da máquina (ex: SA3, PV1, PN90, M88)..." style="flex:1;">
-        <select id="filterStatus">
-          <option value="todos">Todos os Status</option>
-          <option value="pendente">Pendentes</option>
-          <option value="resolvido">Resolvidos / Mantidos</option>
-        </select>
-      </div>
-    </div>
-
-    <div class="card">
-      <div id="avariasTableContainer">
-        ${renderizarTabelaAvarias()}
-      </div>
-    </div>
-  `;
-
-  $("searchMachine").addEventListener("input", atualizarFiltroAvarias);
-  $("filterStatus").addEventListener("change", atualizarFiltroAvarias);
-}
-
-function atualizarFiltroAvarias() {
-  const query = $("searchMachine") ? $("searchMachine").value.trim().toLowerCase() : "";
-  const status = $("filterStatus") ? $("filterStatus").value : "todos";
-  const container = $("avariasTableContainer");
-  if (container) container.innerHTML = renderizarTabelaAvarias(query, status);
-}
-
-function renderizarTabelaAvarias(query = "", filterStatus = "todos") {
-  let lista = db.reports || [];
-
-  if (filterStatus !== "todos") {
-    lista = lista.filter(r => r && r.status === filterStatus);
-  }
-
-  if (query) {
-    lista = lista.filter(r => {
-      if (!r) return false;
-      const numStr = (r.number || "").toLowerCase();
-      const modelStr = (r.model || "").toLowerCase();
-      const descStr = (r.description || "").toLowerCase();
-      const reporterStr = (r.reporterName || "").toLowerCase();
-
-      return numStr.includes(query) ||
-             modelStr.includes(query) ||
-             descStr.includes(query) ||
-             reporterStr.includes(query);
-    });
-  }
-
-  return `
-    <div class="table-container">
-      <div class="table">
-        <table>
-          <tr>
-            <th>Modelo / Máquina</th>
-            <th>Pedido Vinculado</th>
-            <th>Defeito Relatado</th>
-            <th>Mídia</th>
-            <th>Professor Reportante</th>
-            <th>Data</th>
-            <th>Parecer / Comentário Admin</th>
-            <th>Status</th>
-            ${user.role === "admin" ? `<th>Ações Admin</th>` : ''}
-          </tr>
-          ${lista.map(r => `
-            <tr>
-              <td><b>[${esc(r.model)}] Nº ${esc(r.number)}</b></td>
-              <td>${r.batchId ? `<small class="pill reserved">${esc(r.batchId)}</small>` : `<span class="muted">Avulso</span>`}</td>
-              <td>${esc(r.description)}</td>
-              <td>${r.mediaUrl ? `<a href="${r.mediaUrl}" target="_blank" style="color:#4f46e5; font-weight:bold;">🖼️ Mídia</a>` : `<span class="muted">Sem mídia</span>`}</td>
-              <td><b>👤 ${esc(r.reporterName)}</b></td>
-              <td><small class="muted">${esc(r.createdAt)}</small></td>
-              <td>
-                ${r.adminComment ? `
-                  <div style="background:#f1f5f9; border-left:3px solid #4f46e5; padding:6px 10px; border-radius:4px; font-size:12px;">
-                    <b>💬 Admin:</b> ${esc(r.adminComment)}
-                  </div>
-                ` : `<span class="muted">Sem comentários</span>`}
-              </td>
-              <td>${r.status === "pendente" ? `<span class="pill maintenance">Avaria</span>` : `<span class="pill available">Resolvido</span>`}</td>
-              ${user.role === "admin" ? `
-                <td>
-                  <button class="ok" onclick="modalResponderReport('${r.idDoc}')">💬 Responder</button>
-                </td>
-              ` : ''}
-            </tr>
-          `).join("") || "<tr><td colspan=9>Nenhum relato encontrado com esses filtros.</td></tr>"}
-        </table>
-      </div>
-    </div>
-  `;
-}
-
-function modalResponderReport(idDoc) {
-  if (user.role !== "admin") return;
-
-  const r = db.reports.find(x => x.idDoc === idDoc);
-  if (!r) return;
-
+function modalPrimeiroAcesso() {
   const m = modal(`
     <div class="modal-top">
-      <h2>💬 Responder Chamado de Avaria</h2>
+      <h2>🆕 Primeiro Acesso</h2>
       <button class="close">&times;</button>
     </div>
-    <form id="fReplyReport">
-      <div class="notice" style="margin-bottom:12px; font-size:13px;">
-        Máquina: <b>[${esc(r.model)}] Nº ${esc(r.number)}</b><br>
-        Relato do Prof. ${esc(r.reporterName)}: <i>"${esc(r.description)}"</i>
-      </div>
-
-      <label style="display:block; font-weight:600; font-size:12px; margin-bottom:4px;">Resposta / Parecer Técnico:</label>
-      <textarea id="adminCommentText" rows="3" style="width:100%;" required>${esc(r.adminComment || '')}</textarea>
-
-      <label style="margin-top:12px; display:block; font-weight:600; font-size:12px;">Status do Chamado:
-        <select id="reportStatusSelect" style="width:100%; margin-top:4px;">
-          <option value="pendente" ${r.status === "pendente" ? "selected" : ""}>⏳ Em Análise / Pendente</option>
-          <option value="resolvido" ${r.status === "resolvido" ? "selected" : ""}>✅ Resolvido / Mantido</option>
-        </select>
+    <form id="fPrimeiroAcesso">
+      <label class="lbl">Nome Completo
+        <input id="paNome" class="inp" placeholder="Ex: Maria Oliveira" required>
       </label>
 
-      <button type="submit" class="btn-primary" style="margin-top:16px; width:100%">💾 Salvar e Atualizar</button>
+      <label class="lbl" style="margin-top:10px;">Usuário de Acesso (Login)
+        <input id="paLogin" class="inp" placeholder="Ex: maria.oliveira" required>
+      </label>
+
+      <label class="lbl" style="margin-top:10px;">Senha (4 números)
+        <input id="paPass" type="password" maxlength="4" pattern="\\d{4}" class="inp" placeholder="Ex: 1234" required>
+      </label>
+
+      <button type="submit" class="btn-primary" style="margin-top:16px; width:100%;">Cadastrar</button>
     </form>
   `);
 
   m.querySelector(".close").onclick = () => m.remove();
-  m.querySelector("#fReplyReport").onsubmit = e => {
+  m.querySelector("#fPrimeiroAcesso").onsubmit = async e => {
     e.preventDefault();
-    const adminComment = $("adminCommentText").value.trim();
-    const status = $("reportStatusSelect").value;
+    const name = $("paNome").value.trim();
+    const userLogin = $("paLogin").value.trim().toLowerCase();
+    const pass = $("paPass").value.trim();
 
-    firestore.collection("reports").doc(idDoc).update({
-      adminComment,
-      status,
-      updatedAt: nowFormatted()
-    });
+    if (pass.length !== 4 || isNaN(pass)) return alert("A senha deve conter exatamente 4 números.");
 
-    alert("Resposta salva com sucesso!");
-    m.remove();
+    try {
+      await firestore.collection("users").add({ id: uid(), name, userLogin, pass, role: "professor" });
+      alert("Cadastro efetuado! Faça login com suas credenciais.");
+      m.remove();
+    } catch (err) {
+      alert("Erro ao cadastrar: " + err.message);
+    }
   };
 }
 
-function renderizarOpcoesHorario(segmentoKey, selectedIndices = []) {
-  const lista = TABELAS_HORARIOS[segmentoKey] || TABELAS_HORARIOS["6_7"];
-  return lista.map((x, i) => {
-    const isChecked = selectedIndices.includes(i);
-    return `
-      <label class="lesson-checkbox ${isChecked ? 'checked' : ''}" style="display:flex; align-items:center; gap:8px; padding:10px; border:1px solid #e2e8f0; border-radius:8px; background:#fff; cursor:pointer;">
-        <input type="checkbox" name="lessonCheck" value="${i}" ${isChecked ? 'checked' : ''}>
-        <span><b>${x.label}</b> <small style="color:#64748b;">${x.start}–${x.end}</small></span>
-      </label>
-    `;
-  }).join("");
+function nav(page) {
+  currentPage = page;
+  const pendentesCount = db.emprestimos.filter(x => x.status === "aguardando").length;
+  const badge = pendentesCount > 0 ? `<span class="badge">${pendentesCount}</span>` : '';
+
+  $("nav").innerHTML = menus
+    .filter(x => user.role === "admin" || !["bloqueios", "usuarios", "devolucoes"].includes(x[0]))
+    .map(x => `<button class="${x[0] === page ? "active" : ""}" data-p="${x[0]}">${x[1]} ${x[0] === "solicitacoes" ? badge : ""}</button>`)
+    .join("");
+
+  document.querySelectorAll("#nav button").forEach(b => b.onclick = () => nav(b.dataset.p));
+  if (typeof window[page] === 'function') window[page]();
 }
 
+function modalEditarMeuPerfil() {
+  if (!user) return;
+  const currentUser = db.users.find(x => (x.idDoc && x.idDoc === user.idDoc) || x.id === user.id) || user;
+
+  const m = modal(`
+    <div class="modal-top">
+      <h2>✏️ Meu Perfil</h2>
+      <button class="close">&times;</button>
+    </div>
+    <form id="fMeuPerfil">
+      <label class="lbl">Nome Completo
+        <input id="mpNome" class="inp" value="${esc(currentUser.name)}" required>
+      </label>
+
+      <label class="lbl" style="margin-top:10px;">Usuário de Acesso
+        <input id="mpLogin" class="inp" value="${esc(currentUser.userLogin || currentUser.name)}" required>
+      </label>
+
+      <label class="lbl" style="margin-top:10px;">Senha (4 números)
+        <div style="display:flex; gap:6px;">
+          <input id="mpPass" type="password" maxlength="4" pattern="\\d{4}" class="inp" value="${esc(currentUser.pass)}" required>
+          <button type="button" id="btnTogglePass" class="btn-secondary">👁️ Ver</button>
+        </div>
+      </label>
+
+      <div style="margin-top:18px; display:flex; gap:6px;">
+        <button type="submit" class="btn-primary" style="flex:1;">Salvar</button>
+        <button type="button" class="btn-secondary close-btn" style="flex:1;">Cancelar</button>
+      </div>
+    </form>
+  `);
+
+  const passInp = m.querySelector("#mpPass");
+  const toggleBtn = m.querySelector("#btnTogglePass");
+
+  toggleBtn.onclick = () => {
+    if (passInp.type === "password") {
+      passInp.type = "text";
+      toggleBtn.textContent = "🙈 Ocultar";
+    } else {
+      passInp.type = "password";
+      toggleBtn.textContent = "👁️ Ver";
+    }
+  };
+
+  m.querySelectorAll(".close, .close-btn").forEach(b => b.onclick = () => m.remove());
+
+  m.querySelector("#fMeuPerfil").onsubmit = async e => {
+    e.preventDefault();
+    const n = $("mpNome").value.trim();
+    const l = $("mpLogin").value.trim().toLowerCase();
+    const p = $("mpPass").value.trim();
+
+    if (p.length !== 4 || isNaN(p)) return alert("A senha deve conter exatamente 4 números.");
+
+    try {
+      if (currentUser.idDoc) {
+        await firestore.collection("users").doc(currentUser.idDoc).update({ name: n, userLogin: l, pass: p });
+      }
+      user.name = n;
+      user.userLogin = l;
+      user.pass = p;
+      localStorage.setItem(USER_CACHE_KEY, JSON.stringify(user));
+
+      alert("Perfil atualizado!");
+      m.remove();
+      iniciarSessao(user);
+    } catch (err) {
+      alert("Erro ao atualizar: " + err.message);
+    }
+  };
+}
+
+/* DASHBOARD */
+function dashboard() {
+  const hoje = new Date().toISOString().split("T")[0];
+  const resHoje = db.reservas.filter(r => r.date === hoje && r.status === "confirmed");
+  const noteHoje = new Set(resHoje.filter(r => r.type === "notebook").map(r => r.equipment)).size;
+  const tabHoje = new Set(resHoje.filter(r => r.type === "tablet").map(r => r.equipment)).size;
+
+  const pctNote = Math.min(100, Math.round((noteHoje / 146) * 100));
+  const pctTab = Math.min(100, Math.round((tabHoje / 11) * 100));
+
+  const renderPieSVG = (pct) => `
+    <svg width="48" height="48" viewBox="0 0 32 32" style="transform: rotate(-90deg);">
+      <circle cx="16" cy="16" r="14" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="4" />
+      <circle cx="16" cy="16" r="14" fill="none" stroke="#f8fafc" stroke-width="4" stroke-dasharray="${pct} 100" pathLength="100" />
+    </svg>`;
+
+  $("main").innerHTML = `
+    <div class="head">
+      <div>
+        <h2>reservamaquinaaqui</h2>
+        <div class="muted">Escola Maria Olímpia · Total: 157 equipamentos</div>
+      </div>
+      <div class="action-bar">
+        <button class="btn-primary" onclick="modalReserva()">+ Criar Solicitação</button>
+        <button class="btn-secondary" onclick="modalReportDefeito()">Reportar Avaria</button>
+      </div>
+    </div>
+
+    <div class="filter-grid" style="margin-bottom:16px;">
+      <div class="card" style="display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <div class="muted">Notebooks Hoje</div>
+          <b style="font-size:20px;">${noteHoje} / 146</b>
+          <div style="font-size:11px; color:var(--text-muted);">${pctNote}% ocupado</div>
+        </div>
+        ${renderPieSVG(pctNote)}
+      </div>
+
+      <div class="card" style="display:flex; justify-content:space-between; align-items:center;">
+        <div>
+          <div class="muted">Tablets Hoje</div>
+          <b style="font-size:20px;">${tabHoje} / 11</b>
+          <div style="font-size:11px; color:var(--text-muted);">${pctTab}% ocupado</div>
+        </div>
+        ${renderPieSVG(pctTab)}
+      </div>
+
+      <div class="card">
+        <div class="muted">Empréstimos Ativos</div>
+        <b style="font-size:22px;">${obterContagemAtivos()}</b>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Retiradas Hoje (${hoje.split('-').reverse().join('/')})</h3>
+      ${usoTabela()}
+    </div>`;
+}
+
+function obterContagemAtivos() {
+  let count = 0;
+  (db.emprestimos || []).forEach(x => {
+    if (x.status === "retirado") {
+      const eqList = x.equipments || (x.equipment ? [x.equipment] : []);
+      count += eqList.filter(e => e && e !== "Pendente").length;
+    }
+  });
+  return count;
+}
+
+function usoTabela() {
+  const ativos = (db.emprestimos || []).filter(x => x && x.status === "retirado");
+  if (!ativos.length) return `<p class="muted" style="padding:12px 0;">Nenhum equipamento em uso no momento.</p>`;
+
+  const lotesAgrupados = {};
+  ativos.forEach(x => {
+    const bid = x.batchId || x.idDoc || x.id;
+    if (!lotesAgrupados[bid]) {
+      lotesAgrupados[bid] = {
+        userName: x.userName,
+        date: x.date,
+        lessons: new Set(),
+        equipments: new Set()
+      };
+    }
+
+    if (x.equipments && Array.isArray(x.equipments)) x.equipments.forEach(e => lotesAgrupados[bid].equipments.add(e));
+    else if (x.equipment) lotesAgrupados[bid].equipments.add(x.equipment);
+
+    if (x.lessons && Array.isArray(x.lessons)) x.lessons.forEach(l => lotesAgrupados[bid].lessons.add(l));
+    else if (x.lesson) lotesAgrupados[bid].lessons.add(x.lesson);
+  });
+
+  const lista = Object.values(lotesAgrupados);
+
+  return `
+    <div class="table-container">
+      <table>
+        <thead>
+          <tr><th>Professor</th><th>Qtd.</th><th>Equipamentos</th><th>Data</th><th>Horários</th></tr>
+        </thead>
+        <tbody>
+          ${lista.map(g => {
+            const eqArray = Array.from(g.equipments).filter(x => x && x !== "Pendente");
+            const listaOrdenada = ordenarEquipamentos(eqArray);
+            return `
+              <tr>
+                <td><b>${esc(g.userName)}</b></td>
+                <td><b>${listaOrdenada.length}</b></td>
+                <td><code>${esc(listaOrdenada.join(", "))}</code></td>
+                <td>${g.date ? g.date.split('-').reverse().join('/') : "—"}</td>
+                <td>${esc(Array.from(g.lessons).join(", "))}</td>
+              </tr>
+            `;
+          }).join("")}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+/* SOLICITAÇÕES */
 function solicitacoes() {
   const listaProfessores = db.users.filter(u => u.role === "professor" || u.role === "admin");
 
   $("main").innerHTML = `
     <div class="head">
-      <div><h2>Solicitações de Máquinas</h2><div class="muted">Pedidos e entregas rotativas</div></div>
-      <button class="btn-primary" onclick="gerarPlanilhaMensalCSV()">📊 Relatório Mensal (.CSV)</button>
+      <div>
+        <h2>Solicitações e Reservas</h2>
+        <div class="muted">Gerenciamento unificado de solicitações</div>
+      </div>
+      <div style="display:flex; gap:6px; flex-wrap:wrap;">
+        <button class="btn-secondary" id="btnFiltrarHoje">📅 Hoje</button>
+        <button class="btn-secondary" id="btnFiltrarAulaAtual">⏰ Aula Atual (Automática)</button>
+        <button class="btn-primary" onclick="exportarRelatorioCSV()">📊 Relatório Mensal (.CSV)</button>
+        <button class="btn-primary" onclick="modalReserva()">+ Nova Solicitação</button>
+      </div>
     </div>
 
     <div class="card" style="margin-bottom:16px;">
-      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:10px; align-items:center;">
-        <input id="searchSolicitacao" placeholder="🔍 Buscar ID, Máquina..." style="width:100%;">
-        
-        <select id="filterProfSolicitacao" style="width:100%;">
-          <option value="todos">👤 Todos os Professores</option>
-          ${listaProfessores.map(p => `<option value="${p.name}">${esc(p.name)}</option>`).join("")}
+      <div class="filter-grid">
+        <input id="searchSol" placeholder="🔍 Buscar ID, nome, máquina..." class="inp">
+        <select id="filterProf" class="inp">
+          <option value="todos">Todos os Professores</option>
+          ${listaProfessores.map(p => `<option value="${esc(p.name)}">${esc(p.name)}</option>`).join("")}
         </select>
-
-        <input id="filterDataSolicitacao" type="date" style="width:100%;" title="Filtrar por Dia de Uso">
-
-        <select id="filterStatusSolicitacao" style="width:100%;">
+        <input id="filterData" type="date" class="inp">
+        <select id="filterStatus" class="inp">
           <option value="todos">Todos os Status</option>
-          <option value="aguardando">🔔 Solicitado (Aguardando)</option>
-          <option value="retirado">📦 Em Uso (Retirado)</option>
-          <option value="devolvido">✅ Devolvido</option>
+          <option value="aguardando">Aguardando Entrega</option>
+          <option value="retirado">Em Uso (Retirado)</option>
+          <option value="devolvido">Devolvido</option>
         </select>
       </div>
     </div>
 
     <div class="card">
-      <div id="solicitacoesTableContainer">
+      <div id="solicitacoesContainer">
         ${renderizarTabelaSolicitacoes()}
       </div>
     </div>`;
 
-  const safeAddEvent = (id, event, fn) => {
-    const el = $(id);
-    if (el) el.addEventListener(event, fn);
+  const trigger = (aulaFiltro = null) => {
+    const q = $("searchSol").value.trim().toLowerCase();
+    const p = $("filterProf").value;
+    const d = $("filterData").value;
+    const s = $("filterStatus").value;
+    $("solicitacoesContainer").innerHTML = renderizarTabelaSolicitacoes(q, p, d, s, aulaFiltro);
   };
 
-  safeAddEvent("searchSolicitacao", "input", atualizarFiltroSolicitacoes);
-  safeAddEvent("filterProfSolicitacao", "change", atualizarFiltroSolicitacoes);
-  safeAddEvent("filterDataSolicitacao", "change", atualizarFiltroSolicitacoes);
-  safeAddEvent("filterStatusSolicitacao", "change", atualizarFiltroSolicitacoes);
+  $("searchSol").addEventListener("input", () => trigger());
+  $("filterProf").addEventListener("change", () => trigger());
+  $("filterData").addEventListener("change", () => trigger());
+  $("filterStatus").addEventListener("change", () => trigger());
+
+  $("btnFiltrarHoje").onclick = () => {
+    const hojeStr = new Date().toISOString().split("T")[0];
+    $("filterData").value = hojeStr;
+    trigger();
+  };
+
+  $("btnFiltrarAulaAtual").onclick = () => {
+    const hojeStr = new Date().toISOString().split("T")[0];
+    const idxAula = obterIndiceAulaAtual();
+    $("filterData").value = hojeStr;
+    trigger(idxAula);
+  };
 }
 
-function atualizarFiltroSolicitacoes() {
-  const container = $("solicitacoesTableContainer");
-  if (!container) return;
+function exportarRelatorioCSV() {
+  const raw = db.emprestimos || [];
+  if (!raw.length) return alert("Nenhum dado encontrado para gerar o relatório.");
 
-  const query = $("searchSolicitacao") ? $("searchSolicitacao").value.trim().toLowerCase() : "";
-  const prof = $("filterProfSolicitacao") ? $("filterProfSolicitacao").value : "todos";
-  const dataUso = $("filterDataSolicitacao") ? $("filterDataSolicitacao").value : "";
-  const status = $("filterStatusSolicitacao") ? $("filterStatusSolicitacao").value : "todos";
-
-  container.innerHTML = renderizarTabelaSolicitacoes(query, prof, dataUso, status);
-}
-
-function renderizarTabelaSolicitacoes(query = "", filterProf = "todos", filterData = "", filterStatus = "todos") {
-  const raw = user.role === "admin" ? db.emprestimos : db.emprestimos.filter(x => x && x.userId === user.id);
   const groups = {};
-  
-  (raw || []).forEach(x => {
+  raw.forEach(x => {
     if (!x) return;
-    const bid = x.batchId || x.id;
-    if (!bid) return;
-
+    const bid = x.batchId || x.idDoc || x.id;
     if (!groups[bid]) {
-      groups[bid] = { 
-        batchId: bid, 
-        userId: x.userId, 
-        userName: x.userName || "Usuário não identificado", 
-        date: x.date || "", 
-        lessons: new Set(), 
-        equipments: new Set(), 
-        statuses: new Set(), 
-        createdAt: x.createdAt || "Data não registrada" 
+      groups[bid] = {
+        userName: x.userName || "Não identificado",
+        date: x.date || "",
+        lessons: new Set(),
+        equipments: new Set(),
+        status: x.status || "aguardando",
+        qtdTotalPedida: 0
       };
     }
-    if (x.lesson) groups[bid].lessons.add(x.lesson);
-    if (x.equipment) groups[bid].equipments.add(x.equipment);
-    if (x.status) groups[bid].statuses.add(x.status);
+
+    const qtdNoDoc = Math.max(x.qtdTotalPedida || 0, x.qtdPedida || 0, x.quantity || 0);
+    if (qtdNoDoc > groups[bid].qtdTotalPedida) {
+      groups[bid].qtdTotalPedida = qtdNoDoc;
+    }
+
+    if (x.lessons && Array.isArray(x.lessons)) x.lessons.forEach(l => groups[bid].lessons.add(l));
+    else if (x.lesson) groups[bid].lessons.add(x.lesson);
+
+    if (x.equipments && Array.isArray(x.equipments)) x.equipments.forEach(e => groups[bid].equipments.add(e));
+    else if (x.equipment) groups[bid].equipments.add(x.equipment);
   });
 
-  let groupArray = Object.values(groups).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  let csvContent = "data:text/csv;charset=utf-8,Professor;Data;Horarios;QtdPedida;QtdAtribuida;Equipamentos;Status\n";
 
-  if (filterProf && filterProf !== "todos") {
-    groupArray = groupArray.filter(g => g.userName === filterProf);
+  Object.values(groups).forEach(g => {
+    const eqArray = Array.from(g.equipments).filter(e => e && e !== "Pendente");
+    const listaOrdenada = ordenarEquipamentos(eqArray);
+    const prof = `"${(g.userName || "").replace(/"/g, '""')}"`;
+    const data = g.date ? g.date.split('-').reverse().join('/') : "—";
+    const horarios = `"${Array.from(g.lessons).join(", ").replace(/"/g, '""')}"`;
+    const qtdPedida = g.qtdTotalPedida || 1;
+    const qtdAtribuida = listaOrdenada.length;
+    const equipamentos = `"${listaOrdenada.join(", ").replace(/"/g, '""')}"`;
+    const status = g.status;
+
+    csvContent += `${prof};${data};${horarios};${qtdPedida};${qtdAtribuida};${equipamentos};${status}\n`;
+  });
+
+  const encodedUri = encodeURI(csvContent);
+  const link = document.createElement("a");
+  link.setAttribute("href", encodedUri);
+  link.setAttribute("download", `relatorio_solicitacoes_${new Date().toISOString().split("T")[0]}.csv`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+function renderizarTabelaSolicitacoes(query = "", filterProf = "todos", filterData = "", filterStatus = "todos", filterAulaIdx = null) {
+  let raw = db.emprestimos || [];
+  if (user.role !== "admin") {
+    raw = raw.filter(x => x && (x.userId === user.id || x.userId === user.idDoc));
   }
 
-  if (filterData) {
-    groupArray = groupArray.filter(g => g.date === filterData);
-  }
+  const groups = {};
+  raw.forEach(x => {
+    if (!x) return;
+    const bid = x.batchId || x.idDoc || x.id;
+    
+    if (!groups[bid]) {
+      groups[bid] = {
+        idDoc: x.idDoc,
+        batchId: bid,
+        userId: x.userId,
+        userName: x.userName || "Não identificado",
+        date: x.date || "",
+        purpose: x.purpose || "outros",
+        lessons: new Set(),
+        lessonIndexes: new Set(),
+        equipments: new Set(),
+        status: x.status || "aguardando",
+        qtdTotalPedida: 0
+      };
+    }
 
-  if (filterStatus && filterStatus !== "todos") {
-    groupArray = groupArray.filter(g => {
-      const isRetirado = g.statuses.has("retirado");
-      const isAguardando = g.statuses.has("aguardando");
-      const isDevolvido = g.statuses.has("devolvido") && !isRetirado && !isAguardando;
+    const qtdNoDoc = Math.max(x.qtdTotalPedida || 0, x.qtdPedida || 0, x.quantity || 0);
+    if (qtdNoDoc > groups[bid].qtdTotalPedida) {
+      groups[bid].qtdTotalPedida = qtdNoDoc;
+    }
 
-      if (filterStatus === "aguardando") return isAguardando;
-      if (filterStatus === "retirado") return isRetirado;
-      if (filterStatus === "devolvido") return isDevolvido;
-      return true;
-    });
+    if (x.lessons && Array.isArray(x.lessons)) x.lessons.forEach(l => groups[bid].lessons.add(l));
+    else if (x.lesson) groups[bid].lessons.add(x.lesson);
+
+    if (x.lessonIndexes && Array.isArray(x.lessonIndexes)) x.lessonIndexes.forEach(idx => groups[bid].lessonIndexes.add(idx));
+    else if (x.lessonIndex !== undefined) groups[bid].lessonIndexes.add(x.lessonIndex);
+
+    if (x.equipments && Array.isArray(x.equipments)) x.equipments.forEach(e => groups[bid].equipments.add(e));
+    else if (x.equipment) groups[bid].equipments.add(x.equipment);
+  });
+
+  let list = Object.values(groups).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+
+  if (filterProf !== "todos") list = list.filter(g => g.userName === filterProf);
+  if (filterData) list = list.filter(g => g.date === filterData);
+  if (filterAulaIdx !== null) list = list.filter(g => g.lessonIndexes.has(filterAulaIdx));
+
+  if (filterStatus !== "todos") {
+    list = list.filter(g => g.status === filterStatus);
   }
 
   if (query) {
-    groupArray = groupArray.filter(g => {
+    list = list.filter(g => {
       const eqStr = Array.from(g.equipments).join(" ").toLowerCase();
-      const userNameStr = (g.userName || "").toLowerCase();
-      const batchIdStr = (g.batchId || "").toLowerCase();
-      const dateStr = g.date || "";
-
-      return userNameStr.includes(query) ||
-             batchIdStr.includes(query) ||
-             eqStr.includes(query) ||
-             dateStr.includes(query);
+      return (g.userName || "").toLowerCase().includes(query) ||
+             (g.batchId || "").toLowerCase().includes(query) ||
+             eqStr.includes(query);
     });
   }
+
+  if (!list.length) return `<p class="muted" style="padding:16px; text-align:center;">Nenhuma solicitação encontrada.</p>`;
 
   return `
     <div class="table-container">
-      <div class="table">
-        <table>
-          <tr><th>Professor Solicitante</th><th>Data de Uso</th><th>Horários</th><th>Qtd. Máquinas</th><th>IDs Vinculados</th><th>Data/Hora Pedido</th><th>Status</th><th>Ações</th></tr>
-          ${groupArray.map(g => {
-            const isRetirado = g.statuses.has("retirado");
-            const isAguardando = g.statuses.has("aguardando");
-            const isDevolvido = g.statuses.has("devolvido") && !isRetirado && !isAguardando;
+      <table>
+        <thead>
+          <tr>
+            <th>Professor</th>
+            <th>Data Uso</th>
+            <th>Horários</th>
+            <th>Atribuição</th>
+            <th>Status</th>
+            <th>Ações</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${list.map(g => {
+            const isRetirado = g.status === "retirado";
+            const isDevolvido = g.status === "devolvido";
+            const eqArray = Array.from(g.equipments).filter(x => x && x !== "Pendente");
+            const qtdAtribuida = eqArray.length;
+            const qtdTotal = g.qtdTotalPedida || 1;
 
-            let statusPill = pill("available");
-            if (isRetirado) statusPill = pill("use");
-            else if (isDevolvido) statusPill = `<span class="pill available">Devolvido</span>`;
-            else if (isAguardando) statusPill = `<span class="pill reserved">🔔 Solicitado</span>`;
+            let stBadge = `<span class="badge">Aguardando</span>`;
+            if (isRetirado) stBadge = `<span class="badge active">Em Uso</span>`;
+            else if (isDevolvido) stBadge = `<span class="badge muted">Devolvido</span>`;
 
-            const listaIds = Array.from(g.equipments);
-            const exibeIds = isRetirado || isDevolvido ? listaIds.join(", ") : "Pendente Entrega";
-            const podeAtribuir = user.role === "admin" || user.id === g.userId;
-            const dataFmt = g.date ? g.date.split('-').reverse().join('/') : "—";
+            const podeEditar = user.role === "admin" || user.id === g.userId || user.idDoc === g.userId;
 
-            return `<tr>
-              <td><b>👤 ${esc(g.userName)}</b></td>
-              <td><b>${dataFmt}</b></td>
-              <td><span class="pill reserved">${Array.from(g.lessons).join(", ")}</span></td>
-              <td><b>${g.equipments.size} máq.</b></td>
-              <td><small><code>${esc(exibeIds)}</code></small></td>
-              <td><small class="muted">🕒 ${esc(g.createdAt)}</small></td>
-              <td>${statusPill}</td>
-              <td>
-                ${podeAtribuir && (isAguardando || isRetirado) ? `<button class="ok" onclick="modalAtribuirMaquinasPedido('${g.batchId}')">📌 Atribuir / Alterar Máquinas</button>` : ""}
-                ${user.role === "admin" && isRetirado ? `<button class="secondary" onclick="devolverLoteRotativo('${g.batchId}')">↩️ Devolver Lote</button>` : ""}
-                ${isRetirado && user.id === g.userId ? `<button class="secondary" onclick="modalTransferirLote('${g.batchId}')">🔄 Transferir</button>` : ""}
-              </td>
-            </tr>`;
-          }).join("") || "<tr><td colspan=8>Nenhuma solicitação encontrada com esses filtros.</td></tr>"}
-        </table>
-      </div>
-    </div>`;
-}
-
-function modalAtribuirMaquinasPedido(batchId) {
-  const emprestimos = db.emprestimos.filter(x => (x.batchId || x.id) === batchId);
-  if (!emprestimos.length) return alert("Pedido não encontrado.");
-
-  const isOwner = emprestimos.some(x => x.userId === user.id || x.userId === user.idDoc);
-  if (user.role !== "admin" && !isOwner) {
-    return alert("Você só pode atribuir ou alterar as máquinas do seu próprio pedido.");
-  }
-
-  const qtdNecessaria = new Set(emprestimos.map(x => x.equipment)).size;
-  const professorNome = emprestimos[0].userName;
-
-  let modeloAtual = "M";
-  let maquinasSelecionadas = [];
-
-  const m = modal(`
-    <div class="modal-top" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-      <h2 style="margin:0; font-size:18px;">📌 Atribuir Máquinas no Pedido</h2>
-      <button class="close">&times;</button>
-    </div>
-
-    <div style="background:#e0e7ff; border-radius:8px; padding:10px 14px; margin-bottom:14px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px;">
-      <span style="font-size:13px; color:#3730a3;">Pedido de: <b>Prof. ${esc(professorNome)}</b></span>
-      <span style="font-size:12px; font-weight:700; color:#4f46e5; background:#ffffff; padding:4px 10px; border-radius:12px;" id="lblCounter">
-        0 / ${qtdNecessaria} selecionadas
-      </span>
-    </div>
-
-    <div style="margin-bottom:14px;">
-      <label style="font-size:12px; font-weight:700; color:#475569; display:block; margin-bottom:4px;">
-        ⌨️ Adicionar Rápido por Número/ID Livre:
-      </label>
-      <div style="display:flex; gap:6px;">
-        <input type="text" id="inpQuickAddMachine" placeholder="Digite qualquer ID (ex: PN90, M88, SA3)..." style="flex:1;">
-        <button type="button" id="btnQuickAddSubmit" class="btn-primary">+ Add</button>
-      </div>
-    </div>
-
-    <div style="margin-bottom:12px;">
-      <label style="font-size:11px; font-weight:700; color:#64748b; text-transform:uppercase; display:block; margin-bottom:6px;">
-        Filtrar Categoria:
-      </label>
-      <div style="display:flex; gap:6px; flex-wrap:wrap;" id="modelFilterButtons">
-        <button type="button" class="btn-model-filter active" data-model="M">M (Multilaser)</button>
-        <button type="button" class="btn-model-filter" data-model="SA">SA (Samsung)</button>
-        <button type="button" class="btn-model-filter" data-model="PV">PV (Positivo V.)</button>
-        <button type="button" class="btn-model-filter" data-model="PN">PN (Positivo N.)</button>
-        <button type="button" class="btn-model-filter" data-model="TAB">TAB (Tablet)</button>
-      </div>
-    </div>
-
-    <div style="margin-bottom:10px; display:flex; gap:8px; justify-content:space-between;">
-      <button type="button" id="btnClearSelection" class="danger" style="font-size:11px; padding:6px 12px;">
-        🧹 Limpar Seleção
-      </button>
-    </div>
-
-    <div style="margin-top:12px; padding:10px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; font-size:12px;">
-      <span style="color:#64748b; font-weight:600;">Máquinas digitadas/selecionadas:</span>
-      <div id="selectedSummary" style="margin-top:2px; font-weight:700; color:#4f46e5; word-break:break-all;">
-        Nenhuma máquina selecionada
-      </div>
-    </div>
-
-    <form id="fAssignOrder" style="margin-top:14px;">
-      <button type="submit" class="btn-primary" style="width:100%; padding:12px; font-size:14px;">
-        ✅ Confirmar e Salvar Máquinas
-      </button>
-    </form>
-  `);
-
-  const atualizarModalUI = () => {
-    m.querySelector("#lblCounter").textContent = `${maquinasSelecionadas.length} / ${qtdNecessaria} selecionadas`;
-    
-    const summary = m.querySelector("#selectedSummary");
-    if (maquinasSelecionadas.length === 0) {
-      summary.textContent = "Nenhuma máquina selecionada";
-      summary.style.color = "#64748b";
-    } else {
-      summary.textContent = maquinasSelecionadas.join(", ");
-      summary.style.color = "#4f46e5";
-    }
-  };
-
-  const processarQuickAdd = () => {
-    const inpQuick = m.querySelector("#inpQuickAddMachine");
-    const rawVal = inpQuick.value.trim().toUpperCase();
-    if (!rawVal) return;
-
-    let idMaq = rawVal;
-    if (!isNaN(rawVal)) {
-      idMaq = modeloAtual + rawVal;
-    }
-
-    if (maquinasSelecionadas.includes(idMaq)) {
-      maquinasSelecionadas = maquinasSelecionadas.filter(x => x !== idMaq);
-    } else {
-      if (maquinasSelecionadas.length >= qtdNecessaria) {
-        alert(`Você já selecionou a quantidade necessária de ${qtdNecessaria} máquina(s)!`);
-        inpQuick.value = "";
-        return;
-      }
-      maquinasSelecionadas.push(idMaq);
-    }
-
-    inpQuick.value = "";
-    atualizarModalUI();
-    inpQuick.focus();
-  };
-
-  const inpQuick = m.querySelector("#inpQuickAddMachine");
-  if (inpQuick) {
-    setTimeout(() => inpQuick.focus(), 150);
-    inpQuick.onkeydown = e => {
-      if (e.key === "Enter") {
-        e.preventDefault();
-        processarQuickAdd();
-      }
-    };
-  }
-
-  const btnQuickAdd = m.querySelector("#btnQuickAddSubmit");
-  if (btnQuickAdd) {
-    btnQuickAdd.onclick = (e) => {
-      e.preventDefault();
-      processarQuickAdd();
-    };
-  }
-
-  m.querySelectorAll(".btn-model-filter").forEach(btn => {
-    btn.onclick = () => {
-      m.querySelectorAll(".btn-model-filter").forEach(b => b.classList.remove("active"));
-      btn.classList.add("active");
-      modeloAtual = btn.dataset.model;
-    };
-  });
-
-  m.querySelector("#btnClearSelection").onclick = () => {
-    maquinasSelecionadas = [];
-    atualizarModalUI();
-  };
-
-  m.querySelector(".close").onclick = () => m.remove();
-
-  m.querySelector("#fAssignOrder").onsubmit = async e => {
-    e.preventDefault();
-
-    if (maquinasSelecionadas.length !== qtdNecessaria) {
-      return alert(`Por favor, selecione exatamente ${qtdNecessaria} máquina(s) antes de confirmar.`);
-    }
-
-    const itensBatch = db.emprestimos.filter(x => (x.batchId || x.id) === batchId);
-    itensBatch.forEach((item, idx) => {
-      const idMaq = maquinasSelecionadas[idx % maquinasSelecionadas.length];
-      firestore.collection("emprestimos").doc(item.idDoc).update({
-        equipment: idMaq,
-        status: "retirado"
-      });
-    });
-
-    db.reservas.filter(x => (x.batchId || x.id) === batchId).forEach((item, idx) => {
-      const idMaq = maquinasSelecionadas[idx % maquinasSelecionadas.length];
-      firestore.collection("reservas").doc(item.idDoc).update({
-        equipment: idMaq
-      });
-    });
-
-    alert("Máquinas atribuídas com sucesso!");
-    m.remove();
-  };
-
-  atualizarModalUI();
-}
-
-function devolverLoteRotativo(batchId) {
-  if (confirm("Confirmar a devolução deste lote de máquinas ao estoque?")) {
-    db.emprestimos.filter(x => (x.batchId || x.id) === batchId).forEach(item => {
-      firestore.collection("emprestimos").doc(item.idDoc).update({ status: "devolvido" });
-    });
-    alert("Lote devolvido com sucesso! As máquinas voltaram a ficar disponíveis no sistema.");
-  }
-}
-
-function usoTabela() {
-  const a = (db.emprestimos || []).filter(x => x && x.status === "retirado");
-  if (!a.length) return `<p class="muted">Nenhum equipamento em uso no momento.</p>`;
-
-  const groups = {};
-  a.forEach(x => {
-    const bid = x.batchId || x.id;
-    if (!bid) return;
-    if (!groups[bid]) groups[bid] = { userName: x.userName || "Não informado", date: x.date || "", lessons: new Set(), equipments: new Set(), createdAt: x.createdAt || "Data não registrada" };
-    if (x.lesson) groups[bid].lessons.add(x.lesson);
-    if (x.equipment) groups[bid].equipments.add(x.equipment);
-  });
-
-  return `
-    <div class="table-container">
-      <div class="table">
-        <table>
-          <tr><th>Professor Responsável</th><th>Qtd. Máquinas</th><th>IDs Atribuídos</th><th>Data do Uso</th><th>Horários</th><th>Data/Hora do Pedido</th></tr>
-          ${Object.values(groups).map(g => {
-            const dataFmt = g.date ? g.date.split('-').reverse().join('/') : "—";
-            return `<tr>
-              <td><b>👤 ${esc(g.userName)}</b></td>
-              <td><b>${g.equipments.size} máq.</b></td>
-              <td><code>${esc(Array.from(g.equipments).join(", "))}</code></td>
-              <td>${dataFmt}</td>
-              <td><span class="pill use">${esc(Array.from(g.lessons).join(", "))}</span></td>
-              <td><small class="muted">🕒 ${esc(g.createdAt)}</small></td>
-            </tr>`;
-          }).join("")}
-        </table>
-      </div>
-    </div>`;
-}
-
-function modalReportDefeito() {
-  const emprestimosAtivos = db.emprestimos.filter(x => x.userId === user.id && x.status === "retirado");
-
-  const m = modal(`
-    <div class="modal-top">
-      <h2>🛠️ Reportar Máquina com Defeito / Avaria</h2>
-      <button class="close">&times;</button>
-    </div>
-    <form id="freport">
-      ${emprestimosAtivos.length > 0 ? `
-        <label style="display:block; font-size:12px; font-weight:600; margin-bottom:4px;">Vincular ao Pedido Ativo:
-          <select id="repBatch" style="width:100%;">
-            <option value="">Nenhum / Chamado Avulso</option>
-            ${Array.from(new Set(emprestimosAtivos.map(e => e.batchId || e.id))).map(b => {
-              const item = emprestimosAtivos.find(e => (e.batchId || e.id) === b);
-              return `<option value="${b}">Pedido ${b} (${item.date.split('-').reverse().join('/')})</option>`;
-            }).join("")}
-          </select>
-        </label>
-      ` : ''}
-      <div class="form-grid" style="margin-top:10px;">
-        <label>Modelo do Equipamento:
-          <select id="repModel" style="width:100%;" required>
-            ${MODELOS_EQUIPAMENTO.map(m => `<option value="${m.id}">${m.label}</option>`).join("")}
-          </select>
-        </label>
-        <label>Número / Identificador:
-          <input id="repNum" placeholder="Ex: SA3, PN90, M88..." style="width:100%;" required>
-        </label>
-      </div>
-      <label style="margin-top:12px; display:block; font-size:12px; font-weight:600;">Descrição do Defeito:
-        <input id="repDesc" placeholder="Ex: Falta tecla 'Enter' / Tela quebrada" style="width:100%; margin-top:4px;" required>
-      </label>
-      <label style="margin-top:12px; display:block; font-size:12px; font-weight:600;">Anexar Mídia (Opcional):
-        <input type="file" id="repMedia" accept="image/*,video/*" style="font-size:13px; margin-top:4px; display:block;">
-      </label>
-      <button class="btn-primary" style="margin-top:18px; width:100%">Enviar Report de Defeito</button>
-    </form>
-  `);
-
-  m.querySelector(".close").onclick = () => m.remove();
-  m.querySelector("#freport").onsubmit = async e => {
-    e.preventDefault();
-    const batchId = $("repBatch") ? $("repBatch").value : "";
-    const model = $("repModel").value;
-    const num = $("repNum").value.trim();
-    const desc = $("repDesc").value.trim();
-    const fileInput = $("repMedia");
-
-    let mediaUrl = "";
-
-    if (fileInput.files.length > 0) {
-      const file = fileInput.files[0];
-      if (file.size > 5 * 1024 * 1024) {
-        return alert("O arquivo excede o limite de 5MB. Por favor, selecione uma mídia menor.");
-      }
-      mediaUrl = await new Promise(resolve => {
-        const reader = new FileReader();
-        reader.onload = e => resolve(e.target.result);
-        reader.readAsDataURL(file);
-      });
-    }
-
-    firestore.collection("reports").add({
-      id: uid(),
-      batchId: batchId || null,
-      reporterId: user.id,
-      reporterName: user.name,
-      model,
-      number: num,
-      description: desc,
-      mediaUrl,
-      adminComment: "",
-      status: "pendente",
-      createdAt: nowFormatted()
-    });
-
-    alert("Defeito reportado com sucesso!");
-    m.remove();
-  };
-}
-
-function usuarios() {
-  const isAdm = user.role === "admin";
-
-  $("main").innerHTML = `
-    <div class="head">
-      <div><h2>Gestão de Usuários</h2><div class="muted">Gestão de professores e acessos.</div></div>
-      ${isAdm ? `<button class="btn-primary" onclick="modalUser()">+ Novo Usuário</button>` : ''}
-    </div>
-    <div class="card">
-      <div class="table-container">
-        <div class="table">
-          <table>
-            <tr><th>Nome Completo</th><th>Usuário</th><th>Senha</th><th>Perfil</th>${isAdm ? `<th>Ações Admin</th>` : ''}</tr>
-            ${db.users.map(u => `<tr>
-              <td>${esc(u.name)}</td>
-              <td><b>${esc(u.userLogin || u.name)}</b></td>
-              <td><code>${esc(u.pass)}</code></td>
-              <td>${u.role === "admin" ? "<b>👑 Administrador</b>" : "Professor"}</td>
-              ${isAdm ? `
+            return `
+              <tr>
+                <td><b>${esc(g.userName)}</b></td>
+                <td>${g.date ? g.date.split('-').reverse().join('/') : "—"}</td>
+                <td><small>${Array.from(g.lessons).join(", ")}</small></td>
                 <td>
-                  <button class="secondary" onclick="modalEditarUsuario('${u.idDoc}')">✏️ Editar</button>
-                  ${u.id === "adm" ? "" : `<button class="danger" onclick="delUser('${u.idDoc}')">Excluir</button>`}
+                  <b>${qtdAtribuida} / ${qtdTotal} máq.</b>
+                  ${qtdAtribuida < qtdTotal ? `<small style="color:#f59e0b; display:block;">(Pendente)</small>` : ''}
                 </td>
-              ` : ''}
-            </tr>`).join("")}
-          </table>
-        </div>
-      </div>
+                <td>${stBadge}</td>
+                <td>
+                  <div style="display:flex; gap:4px; flex-wrap:wrap;">
+                    ${podeEditar ? `<button class="btn-sm" onclick="modalAtribuirMaquinasLegado('${g.batchId}')">📌 Atribuir Máquinas</button>` : ''}
+                    ${podeEditar ? `<button class="btn-sm" onclick="modalEditarReserva('${g.batchId}')">✏️ Editar</button>` : ''}
+                    ${podeEditar && !isDevolvido ? `<button class="btn-sm danger" onclick="devolverLoteComRegistro('${g.batchId}')">↩️ Devolver</button>` : ''}
+                    ${podeEditar ? `<button class="btn-sm danger" onclick="cancelarLote('${g.batchId}')">🗑️ Excluir</button>` : ''}
+                  </div>
+                </td>
+              </tr>`;
+          }).join("")}
+        </tbody>
+      </table>
     </div>`;
 }
 
-function modalUser() {
-  const m = modal(`
-    <div class="modal-top"><h2>Cadastrar Usuário</h2><button class="close">&times;</button></div>
-    <form id="uf">
-      <div class="form-grid">
-        <label>Nome Completo<input id="un" required style="width:100%;"></label>
-        <label>Usuário de Login<input id="ul" required style="width:100%;"></label>
-        <label>Senha (Exatamente 4 números)
-          <input id="up" type="password" maxlength="4" pattern="\\d{4}" placeholder="Ex: 1234" required style="width:100%;">
-        </label>
-        <label>Perfil / Função
-          <select id="urole" style="width:100%;">
-            <option value="professor">Professor</option>
-            <option value="admin">👑 Administrador</option>
-          </select>
-        </label>
-      </div>
-      <button class="btn-primary" style="margin-top:18px; width:100%">Cadastrar Usuário</button>
-    </form>`);
-  m.querySelector(".close").onclick = () => m.remove();
-  m.querySelector("#uf").onsubmit = e => {
-    e.preventDefault();
-    let p = $("up").value.trim();
-    if (p.length !== 4 || isNaN(p)) return alert("A senha deve conter exatamente 4 números.");
-    
-    const selectedRole = $("urole").value;
+/* SISTEMA COM PREFIXOS RÁPIDOS + VÍRGULA AUTOMÁTICA */
+function modalAtribuirMaquinasLegado(batchId) {
+  const itens = db.emprestimos.filter(x => (x.batchId || x.idDoc || x.id) === batchId);
+  if (!itens.length) return alert("Solicitação não encontrada.");
 
-    firestore.collection("users").add({ 
-      id: uid(), 
-      name: $("un").value.trim(), 
-      userLogin: $("ul").value.trim().toLowerCase(), 
-      pass: p, 
-      role: selectedRole 
-    });
-    
-    m.remove();
+  const itemPrincipal = itens[0];
+  const bloqDia = db.bloqueios.filter(b => b.date === itemPrincipal.date);
+
+  if (bloqDia.some(b => b.lesson === "all") && user.role !== "admin") {
+    return alert(`🚫 ERRO CRÍTICO: Esta data (${itemPrincipal.date.split('-').reverse().join('/')}) possui BLOQUEIO TOTAL.`);
+  }
+
+  let selecionadas = [];
+  itens.forEach(x => {
+    if (x.equipments && Array.isArray(x.equipments)) {
+      x.equipments.forEach(eq => { if (eq && eq !== "Pendente" && !selecionadas.includes(eq)) selecionadas.push(eq); });
+    } else if (x.equipment && x.equipment !== "Pendente" && !selecionadas.includes(x.equipment)) {
+      selecionadas.push(x.equipment);
+    }
+  });
+
+  let qtdLimite = 1;
+  itens.forEach(x => {
+    const q = Math.max(x.qtdTotalPedida || 0, x.qtdPedida || 0, x.quantity || 0);
+    if (q > qtdLimite) qtdLimite = q;
+  });
+
+  let prefixoAtual = "M";
+
+  const renderTags = () => {
+    if (!selecionadas.length) return `<span class="muted" style="font-size:12px;">Nenhuma máquina atribuída ainda.</span>`;
+    return selecionadas.map(eq => `
+      <span class="badge active" style="font-size:12px; padding:4px 8px; display:inline-flex; align-items:center; gap:4px; margin:2px;">
+        ${eq} <b style="cursor:pointer; color:#fff;" onclick="window.removerTagAtribuicao('${eq}')">&times;</b>
+      </span>
+    `).join("");
   };
-}
-
-function modalEditarUsuario(idDoc) {
-  const u = db.users.find(x => x.idDoc === idDoc);
-  if (!u) return;
-
-  const m = modal(`
-    <div class="modal-top"><h2>Editar Usuário</h2><button class="close">&times;</button></div>
-    <form id="euf">
-      <div class="form-grid">
-        <label>Nome Completo<input id="eun" value="${esc(u.name)}" required style="width:100%;"></label>
-        <label>Usuário Login<input id="eul" value="${esc(u.userLogin || '')}" required style="width:100%;"></label>
-        <label>Senha (Exatamente 4 números)
-          <input id="eup" type="password" value="${esc(u.pass)}" maxlength="4" pattern="\\d{4}" required style="width:100%;">
-        </label>
-        <label>Perfil / Função
-          <select id="eurole" style="width:100%;">
-            <option value="professor" ${u.role === "professor" ? "selected" : ""}>Professor</option>
-            <option value="admin" ${u.role === "admin" ? "selected" : ""}>👑 Administrador</option>
-          </select>
-        </label>
-      </div>
-      <button class="btn-primary" style="margin-top:18px; width:100%">Salvar Alterações</button>
-    </form>`);
-  m.querySelector(".close").onclick = () => m.remove();
-  m.querySelector("#euf").onsubmit = e => {
-    e.preventDefault();
-    let p = $("eup").value.trim();
-    if (p.length !== 4 || isNaN(p)) return alert("A senha deve conter exatamente 4 números.");
-    
-    const newRole = $("eurole").value;
-
-    firestore.collection("users").doc(idDoc).update({ 
-      name: $("eun").value.trim(), 
-      userLogin: $("eul").value.trim().toLowerCase(), 
-      pass: p,
-      role: newRole
-    });
-
-    alert("Usuário atualizado com sucesso!");
-    m.remove();
-  };
-}
-
-function delUser(idDoc) {
-  if (confirm("Deseja excluir este usuário?")) firestore.collection("users").doc(idDoc).delete();
-}
-
-function modalTransferirLote(batchId) {
-  const emprestimos = db.emprestimos.filter(x => (x.batchId || x.id) === batchId && x.status === "retirado");
-  if (!emprestimos.length) return alert("Não há empréstimos ativos para transferir neste lote.");
-
-  const professores = db.users.filter(u => u.idDoc !== user.idDoc && u.id !== user.id);
-  if (!professores.length) return alert("Nenhum outro professor cadastrado no sistema.");
-
-  const transferenciaExistente = db.transferencias.find(t => t.batchId === batchId && t.status === "pendente");
 
   const m = modal(`
     <div class="modal-top">
-      <h2>🔄 Transferir Máquinas para outro Professor</h2>
+      <h2>📌 Atribuir Máquinas no Pedido</h2>
       <button class="close">&times;</button>
     </div>
-    <form id="ftransfer">
-      <div class="notice" style="margin-bottom:12px; padding:10px; border-radius:6px; font-size:13px;">
-        Selecione o professor que vai receber as <b>${new Set(emprestimos.map(e => e.equipment)).size} máquina(s)</b>. O destinatário precisará confirmar a troca no sistema.
-      </div>
-      ${transferenciaExistente ? `
-        <div class="notice danger-notice" style="margin-bottom:12px; font-size:12px;">
-          ⚠️ Existe uma solicitação pendente para <b>Prof. ${esc(transferenciaExistente.toUserName)}</b>. Selecionar outro professor irá atualizar o pedido.
-        </div>
-      ` : ''}
-      <label style="display:block; font-size:12px; font-weight:600; margin-bottom:4px;">Professor Destinatário:
-        <select id="targetUser" style="width:100%; margin-top:4px;" required>
-          <option value="">Selecione o professor...</option>
-          ${professores.map(p => `<option value="${p.idDoc}" ${transferenciaExistente && transferenciaExistente.toUserDocId === p.idDoc ? 'selected' : ''}>${esc(p.name)}</option>`).join("")}
-        </select>
+
+    <div style="background:rgba(59, 130, 246, 0.1); border:1px solid rgba(59, 130, 246, 0.3); padding:10px 14px; border-radius:8px; display:flex; justify-content:space-between; align-items:center; margin-bottom:14px;">
+      <span style="font-size:13px;">Pedido de: <b>${esc(itemPrincipal.userName)}</b></span>
+      <span id="badgeContadorAtrib" class="badge active" style="font-size:12px;">${selecionadas.length} / ${qtdLimite} máq.</span>
+    </div>
+
+    <label class="lbl"><b>CLIQUE NO PREFIXO PARA SELECIONAR:</b></label>
+    <div id="grupoBotoesPrefixos" style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px;">
+      ${MODELOS_EQUIPAMENTO.map(cat => `
+        <button type="button" class="btn-secondary btn-sm btn-cat-filter ${cat.id === prefixoAtual ? 'active' : ''}" data-cat="${cat.id}" style="${cat.id === prefixoAtual ? 'background:var(--primary); color:#fff; border-color:var(--primary);' : ''}">${cat.label}</button>
+      `).join("")}
+    </div>
+
+    <label class="lbl"><b>DIGITE O NÚMERO E APERTE VÍRGULA (,):</b></label>
+    <div style="font-size:11px; color:var(--text-muted); margin-bottom:6px;">Ex: com o prefixo ativo, digite <code style="color:#38bdf8;">1, 2, 3,</code> para adicionar instantaneamente.</div>
+    
+    <input id="inpAtribComando" class="inp" placeholder="Digite o número (ex: 1, 2...)" style="font-size:15px; padding:10px;" autofocus>
+
+    <div style="margin-top:14px; margin-bottom:8px;">
+      <label class="check-aula-card" style="display:flex; align-items:center; gap:8px; cursor:pointer; background:rgba(245, 158, 11, 0.1); border-color:rgba(245, 158, 11, 0.3);">
+        <input type="checkbox" id="chkExtraTroca">
+        <span><b>➕ Permitir Máquinas Extras / Acima do Pedido</b></span>
       </label>
-      <button class="btn-primary" style="margin-top:18px; width:100%">🚀 Solicitar Transferência</button>
-    </form>
+    </div>
+
+    <div style="background:var(--bg-input); border:1px solid var(--border); padding:12px; border-radius:8px; margin-bottom:16px; min-height:60px;">
+      <label class="lbl" style="margin-bottom:6px; display:block;">Máquinas Atribuídas:</label>
+      <div id="containerTagsAtrib">${renderTags()}</div>
+    </div>
+
+    <button type="button" id="btnSaveAssign" class="btn-primary" style="width:100%; padding:12px;">✅ Salvar e Concluir Atribuição</button>
   `);
 
+  const inputEl = m.querySelector("#inpAtribComando");
+  const containerTags = m.querySelector("#containerTagsAtrib");
+  const badgeContador = m.querySelector("#badgeContadorAtrib");
+
+  const atualizarTelaTags = () => {
+    containerTags.innerHTML = renderTags();
+    badgeContador.textContent = `${selecionadas.length} / ${qtdLimite} máq.`;
+  };
+
+  window.removerTagAtribuicao = (eq) => {
+    selecionadas = selecionadas.filter(x => x !== eq);
+    atualizarTelaTags();
+  };
+
+  m.querySelectorAll(".btn-cat-filter").forEach(btn => {
+    btn.onclick = () => {
+      prefixoAtual = btn.dataset.cat;
+      m.querySelectorAll(".btn-cat-filter").forEach(b => {
+        b.style.background = "";
+        b.style.color = "";
+        b.style.borderColor = "";
+      });
+      btn.style.background = "var(--primary)";
+      btn.style.color = "#fff";
+      btn.style.borderColor = "var(--primary)";
+      inputEl.focus();
+    };
+  });
+
+  inputEl.addEventListener("input", (e) => {
+    const val = inputEl.value;
+    if (val.includes(",")) {
+      const pedacos = val.split(",");
+      for (let i = 0; i < pedacos.length - 1; i++) {
+        let bruto = pedacos[i].trim().toUpperCase();
+        if (bruto) {
+          const permitirExtra = m.querySelector("#chkExtraTroca").checked;
+          if (!permitirExtra && selecionadas.length >= qtdLimite) {
+            alert(`Limite de ${qtdLimite} máquinas atingido! Marque "Permitir Máquinas Extras" se precisar.`);
+            break;
+          }
+
+          let codigoFinal = bruto;
+          if (!/[A-Z]/.test(bruto)) {
+            codigoFinal = prefixoAtual + bruto;
+          }
+
+          if (!selecionadas.includes(codigoFinal)) {
+            selecionadas.push(codigoFinal);
+          }
+        }
+      }
+      inputEl.value = pedacos[pedacos.length - 1];
+      atualizarTelaTags();
+    }
+  });
+
+  inputEl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      let bruto = inputEl.value.trim().toUpperCase();
+      if (bruto) {
+        const permitirExtra = m.querySelector("#chkExtraTroca").checked;
+        if (!permitirExtra && selecionadas.length >= qtdLimite) {
+          return alert(`Limite de ${qtdLimite} máquinas atingido!`);
+        }
+
+        let codigoFinal = bruto;
+        if (!/[A-Z]/.test(bruto)) {
+          codigoFinal = prefixoAtual + bruto;
+        }
+
+        if (!selecionadas.includes(codigoFinal)) {
+          selecionadas.push(codigoFinal);
+        }
+        inputEl.value = "";
+        atualizarTelaTags();
+      }
+    }
+  });
+
   m.querySelector(".close").onclick = () => m.remove();
-  m.querySelector("#ftransfer").onsubmit = async e => {
-    e.preventDefault();
-    const targetDocId = $("targetUser").value;
-    const targetUser = db.users.find(u => u.idDoc === targetDocId);
-    if (!targetUser) return alert("Professor não encontrado.");
+
+  m.querySelector("#btnSaveAssign").onclick = async () => {
+    const resto = inputEl.value.trim().toUpperCase();
+    if (resto) {
+      let codigoFinal = resto;
+      if (!/[A-Z]/.test(resto)) codigoFinal = prefixoAtual + resto;
+      if (!selecionadas.includes(codigoFinal)) selecionadas.push(codigoFinal);
+    }
 
     try {
-      if (transferenciaExistente) {
-        await firestore.collection("transferencias").doc(transferenciaExistente.idDoc).update({ status: "cancelado" });
+      const novostatus = selecionadas.length > 0 ? "retirado" : "aguardando";
+      const listaSalvar = selecionadas.length > 0 ? selecionadas : ["Pendente"];
+
+      for (let target of itens) {
+        await firestore.collection("emprestimos").doc(target.idDoc).update({
+          equipments: listaSalvar,
+          equipment: listaSalvar[0] || "Pendente",
+          status: novostatus
+        });
       }
 
-      const qty = new Set(emprestimos.map(x => x.equipment)).size;
-      await firestore.collection("transferencias").add({
-        id: uid(),
-        batchId,
-        fromUserId: user.id || user.idDoc,
-        fromUserDocId: user.idDoc,
-        fromUserName: user.name,
-        toUserId: targetUser.id || targetUser.idDoc,
-        toUserDocId: targetUser.idDoc,
-        toUserName: targetUser.name,
-        qty: qty,
-        status: "pendente",
-        createdAt: nowFormatted()
-      });
-
+      alert("Atribuição salva com sucesso!");
       m.remove();
-      modalSucessoTransferencia(batchId, targetUser.name);
     } catch (err) {
-      alert("Erro ao enviar a solicitação: " + err.message);
+      alert("Erro ao salvar: " + err.message);
     }
   };
 }
 
-function modalSucessoTransferencia(batchId, targetUserName) {
-  const m = modal(`
-    <div class="modal-top">
-      <h2>🎉 Troca Solicitada</h2>
-      <button class="close">&times;</button>
-    </div>
-    <div style="text-align:center; padding:10px 0;">
-      <div style="font-size:16px; font-weight:700; color:#10b981; margin-bottom:8px;">
-        ✅ Solicitação de troca feita com sucesso!
-      </div>
-      <p style="font-size:13px; color:#475569; margin-bottom:16px;">
-        Sua solicitação foi enviada para o <b>Prof. ${esc(targetUserName)}</b> e aguarda a confirmação dele.
-      </p>
-
-      <div style="background:#f8fafc; padding:12px; border-radius:8px; border:1px solid #e2e8f0; margin-bottom:16px;">
-        <span style="font-size:13px; font-weight:600; color:#334155;">Deseja alterar o professor selecionado?</span>
-        <div style="margin-top:8px;">
-          <button id="btnAlterarProf" class="secondary" style="width:100%; font-size:13px;">
-            ✏️ Alterar Professor Destinatário
-          </button>
-        </div>
-      </div>
-
-      <button id="btnFecharSucesso" class="btn-primary" style="width:100%;">
-        👍 OK, Entendi
-      </button>
-    </div>
-  `);
-
-  m.querySelector(".close").onclick = () => m.remove();
-  m.querySelector("#btnFecharSucesso").onclick = () => m.remove();
-  m.querySelector("#btnAlterarProf").onclick = () => {
-    m.remove();
-    modalTransferirLote(batchId);
-  };
-}
-
-function verificarTransferenciasPendentes() {
-  if (!user) return;
-
-  const pendentes = db.transferencias.filter(t => 
-    (t.toUserId === user.id || t.toUserDocId === user.idDoc || t.toUserId === user.idDoc) && 
-    t.status === "pendente"
-  );
-  if (!pendentes.length) return;
-
-  const t = pendentes[0];
-  if (transferenciasExibidas.has(t.idDoc)) return;
-
-  transferenciasExibidas.add(t.idDoc);
-
-  const m = modal(`
-    <div id="transf-modal-${t.id}" style="text-align:center; padding:4px;">
-      <div style="font-size:28px; margin-bottom:4px;">🔄</div>
-      <h3 style="margin:0 0 6px 0; font-size:16px; color:#0f172a;">Troca de Equipamentos</h3>
-      <p style="font-size:13px; color:#334155; margin-bottom:14px; line-height:1.4;">
-        O <b>Prof. ${esc(t.fromUserName)}</b> deseja transferir <b>${t.qty} máquina(s)</b> para você.
-      </p>
-
-      <div style="display:flex; gap:8px;">
-        <button class="ok" style="flex:1;" id="btnAceitarTransf">
-          ✅ Aceitar
-        </button>
-        <button class="danger" style="flex:1;" id="btnRecusarTransf">
-          ❌ Recusar
-        </button>
-      </div>
-    </div>
-  `, true);
-
-  m.querySelector("#btnAceitarTransf").onclick = () => {
-    document.querySelectorAll(".modal").forEach(el => el.remove());
-    const tr = db.transferencias.find(x => x.idDoc === t.idDoc);
-    if (tr) tr.status = "aceito";
-    aceitarTransferencia(t.idDoc, t.batchId);
-  };
-
-  m.querySelector("#btnRecusarTransf").onclick = () => {
-    document.querySelectorAll(".modal").forEach(el => el.remove());
-    const tr = db.transferencias.find(x => x.idDoc === t.idDoc);
-    if (tr) tr.status = "recusado";
-    recusarTransferencia(t.idDoc);
-  };
-}
-
-async function aceitarTransferencia(idDocTransf, batchId) {
-  try {
-    firestore.collection("transferencias").doc(idDocTransf).update({ status: "aceito" });
-
-    const empItems = db.emprestimos.filter(x => (x.batchId || x.id) === batchId);
-    const resItems = db.reservas.filter(x => (x.batchId || x.id) === batchId);
-
-    empItems.forEach(item => {
-      item.userId = user.id || user.idDoc;
-      item.userName = user.name;
-      firestore.collection("emprestimos").doc(item.idDoc).update({ 
-        userId: user.id || user.idDoc, 
-        userName: user.name 
-      });
-    });
-
-    resItems.forEach(item => {
-      item.userId = user.id || user.idDoc;
-      item.userName = user.name;
-      firestore.collection("reservas").doc(item.idDoc).update({ 
-        userId: user.id || user.idDoc, 
-        userName: user.name 
-      });
-    });
-  } catch (err) {
-    console.error("Erro ao transferir:", err);
-  }
-}
-
-async function recusarTransferencia(idDocTransf) {
-  try {
-    firestore.collection("transferencias").doc(idDocTransf).update({ status: "recusado" });
-  } catch (err) {
-    console.error("Erro ao recusar:", err);
-  }
-}
-
-function encerrarEmprestimosApos1310() {
-  const agora = new Date();
-  const tempoEmMinutos = agora.getHours() * 60 + agora.getMinutes();
-  const limite1310 = 13 * 60 + 10;
-
-  if (tempoEmMinutos < limite1310 && !confirm("Ainda não são 13:10. Deseja encerrar mesmo assim?")) return;
-
-  const hoje = agora.toISOString().split("T")[0];
-  const ativos = db.emprestimos.filter(x => x.date === hoje && x.status === "retirado");
-
-  if (!ativos.length) return alert("Não há empréstimos ativos pendentes para encerrar hoje.");
-
-  if (confirm(`Encerrar ${ativos.length} máquinas ativas do dia?`)) {
-    ativos.forEach(item => firestore.collection("emprestimos").doc(item.idDoc).update({ status: "devolvido" }));
-    alert("Todos os empréstimos foram encerrados com sucesso!");
-  }
-}
-
-function calendario() {
-  const dataAtual = new Date();
-  if (calYear !== dataAtual.getFullYear() || calMonth !== dataAtual.getMonth()) {
-    calYear = dataAtual.getFullYear();
-    calMonth = dataAtual.getMonth();
-  }
-
+/* HISTÓRICO DE DEVOLUÇÕES */
+function devolucoes() {
   $("main").innerHTML = `
     <div class="head">
       <div>
-        <h2>Calendário Interativo de Ocupação</h2>
-        <div class="muted">Acompanhe a reserva de máquinas por horário.</div>
-      </div>
-      <div style="display:flex; gap:8px; align-items:center;">
-        <button class="secondary" onclick="mudarMes(-1)">&lt; Anterior</button>
-        <strong id="calMonthTitle" style="font-size:15px; min-width:140px; text-align:center;"></strong>
-        <button class="secondary" onclick="mudarMes(1)">Próximo &gt;</button>
+        <h2>Histórico de Devoluções</h2>
+        <div class="muted">Registro cronológico de entregas e devoluções</div>
       </div>
     </div>
-    <div class="card mb-12" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
-      <div class="cal-legend">
-        <span class="leg-item"><i class="leg-box free"></i> Livre</span>
-        <span class="leg-item"><i class="leg-box has-res"></i> Com Reservas</span>
-        <span class="leg-item"><i class="leg-box blocked"></i> Bloqueado / Feriado</span>
-        <span class="leg-item"><i class="leg-box disabled"></i> Passado / Fim de Semana</span>
-      </div>
-      <div style="display:flex; align-items:center; gap:6px;">
-        <label style="font-size:12px; font-weight:600; color:#475569;">🔍 Filtrar Status:</label>
-        <select id="calStatusFilter" style="padding:6px 10px; font-size:12px; border-radius:6px; border:1px solid #cbd5e1;">
-          <option value="todos">Todos os Dias</option>
-          <option value="free">Apenas Livres</option>
-          <option value="has-res">Apenas Com Reservas</option>
-          <option value="blocked">Apenas Bloqueados / Feriados</option>
-        </select>
-      </div>
+
+    <div class="card" style="margin-bottom:16px;">
+      <input id="searchDevol" placeholder="🔍 Pesquisar por professor, equipamento ou data..." class="inp">
     </div>
+
     <div class="card">
-      <div class="month-grid-header">
-        <div>Dom</div><div>Seg</div><div>Ter</div><div>Qua</div><div>Qui</div><div>Sex</div><div>Sáb</div>
+      <div id="devolucoesTableContainer">
+        ${renderTabelaDevolucoes()}
       </div>
-      <div id="monthGrid" class="month-grid"></div>
     </div>`;
 
-  $("calStatusFilter").addEventListener("change", renderMonthGrid);
+  $("searchDevol").addEventListener("input", (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    $("devolucoesTableContainer").innerHTML = renderTabelaDevolucoes(q);
+  });
+}
+
+function renderTabelaDevolucoes(query = "") {
+  let list = db.devolucoes || [];
+
+  if (query) {
+    list = list.filter(d => 
+      (d.userName || "").toLowerCase().includes(query) ||
+      (d.equipment || "").toLowerCase().includes(query) ||
+      (d.dateUse || "").toLowerCase().includes(query) ||
+      (d.lesson || "").toLowerCase().includes(query)
+    );
+  }
+
+  list.sort((a, b) => (b.returnedAt || "").localeCompare(a.returnedAt || ""));
+
+  if (!list.length) return `<p class="muted" style="text-align:center; padding:16px 0;">Nenhum histórico encontrado.</p>`;
+
+  return `
+    <div class="table-container">
+      <table>
+        <thead>
+          <tr>
+            <th>Professor</th>
+            <th>Equipamento</th>
+            <th>Data de Uso</th>
+            <th>Horários</th>
+            <th>Data/Hora Devolução</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${list.map(d => `
+            <tr>
+              <td><b>${esc(d.userName)}</b></td>
+              <td><span class="badge active">${esc(d.equipment)}</span></td>
+              <td>${d.dateUse ? d.dateUse.split('-').reverse().join('/') : "—"}</td>
+              <td><small>${esc(d.lesson)}</small></td>
+              <td><small>${esc(d.returnedAt)}</small></td>
+            </tr>
+          `).join("")}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+/* EDITAR RESERVA */
+function modalEditarReserva(batchId) {
+  const itens = db.emprestimos.filter(x => (x.batchId || x.idDoc || x.id) === batchId);
+  if (!itens.length) return alert("Solicitação não encontrada.");
+
+  let qtdAtual = 1;
+  itens.forEach(x => {
+    const q = Math.max(x.qtdTotalPedida || 0, x.qtdPedida || 0, x.quantity || 0);
+    if (q > qtdAtual) qtdAtual = q;
+  });
+
+  const itemPrincipal = itens[0];
+
+  const m = modal(`
+    <div class="modal-top">
+      <h2>✏️ Editar Solicitação</h2>
+      <button class="close">&times;</button>
+    </div>
+    <form id="fEditSol">
+      <label class="lbl">Data de Uso
+        <input id="eDate" type="date" value="${itemPrincipal.date}" class="inp" required>
+      </label>
+
+      <label class="lbl" style="margin-top:10px;">Quantidade Pedida
+        <input id="eQty" type="number" min="1" max="50" value="${qtdAtual}" class="inp" required>
+      </label>
+
+      <button type="submit" class="btn-primary" style="margin-top:16px; width:100%;">Salvar Alterações</button>
+    </form>
+  `);
+
+  m.querySelector(".close").onclick = () => m.remove();
+  m.querySelector("#fEditSol").onsubmit = async e => {
+    e.preventDefault();
+    const novaData = $("eDate").value;
+    const novaQtd = parseInt($("eQty").value, 10);
+
+    try {
+      for (let target of itens) {
+        await firestore.collection("emprestimos").doc(target.idDoc).update({
+          date: novaData,
+          qtdTotalPedida: novaQtd
+        });
+      }
+      alert("Solicitação atualizada!");
+      m.remove();
+    } catch (err) {
+      alert("Erro ao atualizar: " + err.message);
+    }
+  };
+}
+
+/* DEVOLUÇÃO */
+async function devolverLoteComRegistro(batchId) {
+  if (!confirm("Confirmar devolução das máquinas com registro em histórico?")) return;
+
+  const itens = db.emprestimos.filter(x => (x.batchId || x.idDoc || x.id) === batchId);
+  if (!itens.length) return;
+  const dataDevolucao = nowFormatted();
+
+  try {
+    for (let target of itens) {
+      await firestore.collection("emprestimos").doc(target.idDoc).update({ status: "devolvido" });
+
+      const eqList = target.equipments || (target.equipment ? [target.equipment] : []);
+      const validEqs = eqList.filter(x => x && x !== "Pendente");
+      const labelAulas = target.lessons ? target.lessons.join(", ") : (target.lesson || "—");
+
+      for (let eq of validEqs) {
+        await firestore.collection("devolucoes").add({
+          id: uid(),
+          batchId: batchId,
+          userName: target.userName,
+          equipment: eq,
+          lesson: labelAulas,
+          dateUse: target.date,
+          deliveredAt: target.createdAt || "—",
+          returnedAt: dataDevolucao
+        });
+      }
+    }
+    alert("Equipamentos devolvidos e registrados no histórico!");
+  } catch (err) {
+    alert("Erro ao devolver: " + err.message);
+  }
+}
+
+function cancelarLote(batchId) {
+  if (confirm("Deseja realmente excluir esta solicitação?")) {
+    db.emprestimos
+      .filter(x => (x.batchId || x.idDoc || x.id) === batchId)
+      .forEach(d => firestore.collection("emprestimos").doc(d.idDoc).delete());
+  }
+}
+
+/* CALENDÁRIO COM CORES CSS CORRIGIDAS NA RÉGUA */
+function calendario() {
+  $("main").innerHTML = `
+    <div class="head">
+      <div>
+        <h2>Calendário de Reservas</h2>
+        <div class="muted">Visualização mensal com régua de ocupação</div>
+      </div>
+      <div class="action-bar" style="display:flex; gap:8px; align-items:center;">
+        <button class="btn-secondary btn-sm" onclick="mudarMes(-1)">&lt; Anterior</button>
+        <b id="calMonthTitle" style="font-size:14px; white-space:nowrap;"></b>
+        <button class="btn-secondary btn-sm" onclick="mudarMes(1)">Próximo &gt;</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom: 12px; padding: 12px;">
+      <h3 style="margin-bottom: 8px; font-size: 12px;">📊 Legenda da Régua por Aula</h3>
+      <div style="display: flex; gap: 4px; flex-wrap: wrap;">
+        ${TABELAS_HORARIOS["6_7"].map((aula, idx) => `
+          <div style="background: rgba(255,255,255,0.05); padding: 3px 6px; border-radius: 4px; border: 1px solid var(--border); font-size: 10px;">
+            <b>${aula.label}:</b> ${aula.start}–${aula.end}
+          </div>
+        `).join("")}
+      </div>
+    </div>
+
+    <div class="card" style="padding: 10px;">
+      <div class="cal-grid-wrapper">
+        <div class="cal-grid" style="text-align:center; font-weight:bold; font-size:11px; margin-bottom:6px; color:var(--text-muted);">
+          <div>Dom</div><div>Seg</div><div>Ter</div><div>Qua</div><div>Qui</div><div>Sex</div><div>Sáb</div>
+        </div>
+        <div id="monthGrid" class="cal-grid"></div>
+      </div>
+    </div>`;
+
   renderMonthGrid();
 }
 
@@ -1503,795 +1127,803 @@ function mudarMes(delta) {
 
 function renderMonthGrid() {
   const meses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
-  if ($("calMonthTitle")) $("calMonthTitle").textContent = `${meses[calMonth]} de ${calYear}`;
-
-  const filtroStatus = $("calStatusFilter") ? $("calStatusFilter").value : "todos";
+  if ($("calMonthTitle")) $("calMonthTitle").textContent = `${meses[calMonth]} / ${calYear}`;
 
   const firstDay = new Date(calYear, calMonth, 1).getDay();
   const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
 
   let html = "";
-  for (let i = 0; i < firstDay; i++) html += `<div class="month-day empty"></div>`;
+  for (let i = 0; i < firstDay; i++) {
+    html += `<div style="min-height:75px; background:rgba(255,255,255,0.01); border-radius:8px;"></div>`;
+  }
 
   for (let d = 1; d <= daysInMonth; d++) {
     const dateStr = `${calYear}-${String(calMonth + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-    const past = isPastDate(dateStr);
-    const wknd = isWeekend(dateStr);
-    const holi = isHoliday(dateStr);
+    const isPast = isPastDate(dateStr);
+    const isWk = isWeekend(dateStr);
+    const bloqDia = db.bloqueios.filter(b => b.date === dateStr);
+    const temBloqueioTotal = bloqDia.some(b => b.lesson === "all");
+    const emprestimosDia = db.emprestimos.filter(r => r.date === dateStr && r.status !== "cancelado");
 
-    const bloqueiosDoDia = db.bloqueios.filter(b => b.date === dateStr);
-    const isFullBlocked = bloqueiosDoDia.some(b => b.lesson === "all");
-    const partialBlocks = bloqueiosDoDia.filter(b => b.lesson !== "all");
+    const ocupacaoPorAula = [0, 0, 0, 0, 0, 0, 0];
+    const lotesPorAula = Array.from({ length: 7 }, () => new Map());
 
-    const reservasDoDia = db.reservas.filter(r => r.date === dateStr && r.status === "confirmed");
-    const qtdMaquinasUnicas = new Set(reservasDoDia.map(r => r.equipment)).size;
-    const professoresQueReservaram = Array.from(new Set(reservasDoDia.map(r => r.userName)));
+    emprestimosDia.forEach(emp => {
+      const bid = emp.batchId || emp.idDoc || emp.id;
+      const qtdDoc = Math.max(emp.qtdTotalPedida || 0, emp.qtdPedida || 0, emp.quantity || 1);
 
-    let statusClass = "free";
-    let labelFull = "Livre";
-    let labelCompact = "Livre";
-    let isClickable = true;
-
-    if (past) {
-      statusClass = "disabled-day";
-      labelFull = "Passado";
-      labelCompact = "—";
-      isClickable = false;
-    } else if (wknd) {
-      statusClass = "disabled-day";
-      labelFull = "Fim de Semana";
-      labelCompact = "—";
-      isClickable = false;
-    } else if (holi) {
-      statusClass = "blocked";
-      labelFull = "🎉 Feriado";
-      labelCompact = "Feriado";
-      isClickable = false;
-    } else if (isFullBlocked) {
-      const mainBlock = bloqueiosDoDia.find(b => b.lesson === "all");
-      const motivo = mainBlock ? mainBlock.reason : "Fechado";
-      statusClass = "blocked";
-      labelFull = `🚫 Fechado: ${motivo}`;
-      labelCompact = `🚫 ${motivo}`;
-      isClickable = false;
-    } else {
-      let txtPartial = "";
-      if (partialBlocks.length > 0) {
-        const motivos = Array.from(new Set(partialBlocks.map(b => b.reason))).join(", ");
-        const aulas = partialBlocks.map(b => `${parseInt(b.lesson, 10) + 1}ª`).join(", ");
-        txtPartial = ` [🚫 ${aulas} Aula: ${motivos}]`;
-      }
-
-      if (professoresQueReservaram.length > 0) {
-        statusClass = "has-res";
-        labelFull = `📦 ${qtdMaquinasUnicas} máq. · 👤 ${professoresQueReservaram.join(', ')}${txtPartial}`;
-        labelCompact = `📦 ${qtdMaquinasUnicas}${partialBlocks.length ? ' ⚠️' : ''}`;
-      } else if (partialBlocks.length > 0) {
-        statusClass = "blocked";
-        labelFull = `⚠️ Bloqueio Parcial${txtPartial}`;
-        labelCompact = `⚠️ ${partialBlocks.length} aula(s)`;
-        isClickable = true;
-      }
-    }
-
-    let lessonsDotsHtml = '<div class="lessons-mini-grid">';
-    for (let l = 0; l < 7; l++) {
-      let dotClass = "free";
-      let titleText = `${l + 1}ª Aula: Livre`;
-
-      if (past || wknd) {
-        dotClass = "off";
-        titleText = `${l + 1}ª Aula: Indisponível`;
-      } else if (holi || isFullBlocked) {
-        dotClass = "block";
-        titleText = `${l + 1}ª Aula: Bloqueada`;
-      } else {
-        const isLessonBlocked = bloqueiosDoDia.some(b => b.lesson === String(l));
-        const isLessonReserved = reservasDoDia.some(r => parseInt(r.lesson, 10) === l);
-
-        if (isLessonBlocked) {
-          dotClass = "block";
-          titleText = `${l + 1}ª Aula: Bloqueada`;
-        } else if (isLessonReserved) {
-          dotClass = "res";
-          titleText = `${l + 1}ª Aula: Reservada`;
+      for (let idx = 0; idx < 7; idx++) {
+        const temAula = (emp.lessonIndexes && emp.lessonIndexes.includes(idx)) || (emp.lessonIndex === idx);
+        if (temAula) {
+          lotesPorAula[idx].set(bid, qtdDoc);
         }
       }
+    });
 
-      lessonsDotsHtml += `<span class="lesson-dot ${dotClass}" title="${titleText}">${l + 1}</span>`;
+    for (let idx = 0; idx < 7; idx++) {
+      let soma = 0;
+      lotesPorAula[idx].forEach(q => soma += q);
+      ocupacaoPorAula[idx] = soma;
     }
-    lessonsDotsHtml += '</div>';
 
-    let opacidadeStyle = "";
-    if (filtroStatus !== "todos" && statusClass !== "disabled-day") {
-      if (filtroStatus !== statusClass) {
-        opacidadeStyle = 'style="opacity: 0.2; filter: grayscale(1); cursor: not-allowed;"';
-      }
-    }
+    let totalMaquinasUnicas = 0;
+    const mapaLotesDia = new Map();
+    emprestimosDia.forEach(emp => {
+      const bid = emp.batchId || emp.idDoc || emp.id;
+      const qtdDoc = Math.max(emp.qtdTotalPedida || 0, emp.qtdPedida || 0, emp.quantity || 1);
+      mapaLotesDia.set(bid, qtdDoc);
+    });
+    mapaLotesDia.forEach(q => totalMaquinasUnicas += q);
+
+    let extraStyle = "";
+    if (isPast || isWk) extraStyle = "opacity:0.3; cursor:not-allowed; background:rgba(0,0,0,0.2);";
+    else if (temBloqueioTotal) extraStyle = "border:1px solid #ef4444; background:rgba(239,68,68,0.12);";
 
     html += `
-      <div class="month-day ${statusClass} ${!isClickable ? 'no-click' : ''}" ${opacidadeStyle} onclick="clickDay('${dateStr}', ${isClickable}, '${esc(labelFull)}')">
-        <div style="display:flex; justify-content:space-between; align-items:center; width:100%;">
-          <span class="day-num">${d}</span>
-          <span class="day-status day-status-compact">${esc(labelCompact)}</span>
+      <div class="cal-day-cell" style="${extraStyle}" onclick="clickCalDay('${dateStr}', ${!isPast && !isWk})">
+        <div class="cal-day-header">
+          <b>${d}</b>
+          ${temBloqueioTotal ? `<span class="badge blocked" style="background:#ef4444; color:#fff;">Bloq.</span>` : (totalMaquinasUnicas > 0 ? `<span class="badge active" style="background:#3b82f6; color:#ffffff; font-weight:bold;">${totalMaquinasUnicas}m</span>` : '')}
         </div>
-        <span class="day-status day-status-full" title="${esc(labelFull)}">${esc(labelFull)}</span>
-        ${lessonsDotsHtml}
+
+        ${!isPast && !isWk ? `
+          <div class="cal-ruler" style="display:flex; gap:2px; margin-top:6px; background:rgba(0,0,0,0.4); padding:3px; border-radius:4px;">
+            ${ocupacaoPorAula.map((qtd, idx) => {
+              const aulaBloqueada = bloqDia.some(b => String(b.lesson) === String(idx));
+              let color = "rgba(255,255,255,0.08)";
+              let textColor = "#ffffff";
+              if (aulaBloqueada || temBloqueioTotal) {
+                color = "#ef4444";
+              } else if (qtd > 0 && qtd <= 30) {
+                color = "#38bdf8";
+                textColor = "#0f172a";
+              } else if (qtd > 30 && qtd <= 70) {
+                color = "#f59e0b";
+                textColor = "#0f172a";
+              } else if (qtd > 70) {
+                color = "#ef4444";
+              }
+
+              return `
+                <div class="cal-ruler-slot" style="flex:1; height:18px; border-radius:2px; background:${color}; display:flex; align-items:center; justify-content:center; font-size:9px; font-weight:bold; color:${textColor};" title="${aulaBloqueada || temBloqueioTotal ? `Aula ${idx+1} Bloqueada` : `${idx+1}ª Aula: ${qtd} máquinas`}">
+                  ${aulaBloqueada || temBloqueioTotal ? '🔒' : (qtd > 0 ? qtd : '')}
+                </div>
+              `;
+            }).join("")}
+          </div>
+        ` : ''}
       </div>`;
   }
   if ($("monthGrid")) $("monthGrid").innerHTML = html;
 }
 
-function clickDay(dateStr, isClickable, reason) {
-  if (!isClickable) return alert(`Data indisponível. Motivo: ${reason}`);
-
-  const temReservas = db.reservas.some(r => r.date === dateStr && r.status === "confirmed");
-  if (temReservas) {
-    modalDetalhesDia(dateStr);
-  } else {
-    modalReserva(dateStr);
+function clickCalDay(dateStr, ok) {
+  if (!ok) return;
+  const bloqDia = db.bloqueios.filter(b => b.date === dateStr);
+  if (bloqDia.some(b => b.lesson === "all") && user.role !== "admin") {
+    return alert(`🚫 ERRO: Esta data (${dateStr.split('-').reverse().join('/')}) está BLOQUEADA.`);
   }
+
+  const empDia = db.emprestimos.filter(r => r.date === dateStr && r.status !== "cancelado");
+  if (empDia.length > 0) modalResumoProfessoresDia(dateStr);
+  else modalReserva(dateStr);
 }
 
-function modalDetalhesDia(dateStr) {
-  const resData = db.reservas.filter(r => r.date === dateStr && r.status === "confirmed");
-  const dateFmt = dateStr.split('-').reverse().join('/');
+function modalResumoProfessoresDia(dateStr) {
+  const dataFormatada = dateStr.split('-').reverse().join('/');
+  const emprestimosDia = db.emprestimos.filter(r => r.date === dateStr && r.status !== "cancelado");
 
-  const groups = {};
-  resData.forEach(r => {
-    const bid = r.batchId || r.id;
-    if (!groups[bid]) {
-      groups[bid] = {
+  const lotesAgrupados = {};
+  emprestimosDia.forEach(emp => {
+    const bid = emp.batchId || emp.idDoc || emp.id;
+    if (!lotesAgrupados[bid]) {
+      lotesAgrupados[bid] = {
         batchId: bid,
-        userId: r.userId,
-        userName: r.userName,
-        type: r.type,
-        segment: r.segment || "6_7",
-        purpose: r.purpose || "outros",
-        lessonsNames: new Set(),
-        equipments: new Set(),
-        createdAt: r.createdAt || "Data não registrada"
+        userName: emp.userName || "Não identificado",
+        type: emp.type || "Notebook",
+        segment: emp.segment === "8_9" ? "8º/9º Ano" : "6º/7º Ano",
+        purposeLabel: FINALIDADES.find(f => f.id === emp.purpose)?.label || emp.purpose || "Outros",
+        aulasSlots: [],
+        equipamentos: new Set(),
+        qtdTotalPedida: 0
       };
     }
-    const tabelaUsada = TABELAS_HORARIOS[r.segment || "6_7"] || TABELAS_HORARIOS["6_7"];
-    const slot = tabelaUsada[r.lesson];
-    groups[bid].lessonsNames.add(slot ? `${slot.label} (${slot.start}–${slot.end})` : r.lesson);
-    groups[bid].equipments.add(r.equipment);
+
+    const qtdNoDoc = Math.max(emp.qtdTotalPedida || 0, emp.qtdPedida || 0, emp.quantity || 0);
+    if (qtdNoDoc > lotesAgrupados[bid].qtdTotalPedida) {
+      lotesAgrupados[bid].qtdTotalPedida = qtdNoDoc;
+    }
+
+    if (emp.equipments && Array.isArray(emp.equipments)) emp.equipments.forEach(e => lotesAgrupados[bid].equipamentos.add(e));
+    else if (emp.equipment) lotesAgrupados[bid].equipamentos.add(emp.equipment);
+
+    const tabelaUsada = TABELAS_HORARIOS[emp.segment || "6_7"] || TABELAS_HORARIOS["6_7"];
+
+    if (emp.lessonIndexes && Array.isArray(emp.lessonIndexes)) {
+      emp.lessonIndexes.forEach(idx => {
+        const slot = tabelaUsada[idx];
+        if (slot) lotesAgrupados[bid].aulasSlots.push(`${slot.label} (${slot.start}–${slot.end})`);
+      });
+    } else if (emp.lessons && Array.isArray(emp.lessons)) {
+      emp.lessons.forEach(l => lotesAgrupados[bid].aulasSlots.push(l));
+    } else if (emp.lesson) {
+      lotesAgrupados[bid].aulasSlots.push(emp.lesson);
+    }
   });
 
-  const list = Object.values(groups);
-  const totalMaquinasDia = new Set(resData.map(r => r.equipment)).size;
+  const listaLotes = Object.values(lotesAgrupados);
+  let totalMaquinasDia = 0;
+  listaLotes.forEach(l => totalMaquinasDia += (l.qtdTotalPedida || 1));
 
   const m = modal(`
     <div class="modal-top">
-      <h2>📅 Agendamentos do Dia ${dateFmt}</h2>
+      <h2 style="display:flex; align-items:center; gap:8px;">
+        <span>📅</span> Agendamentos do Dia ${dataFormatada}
+      </h2>
       <button class="close">&times;</button>
     </div>
-    <div style="margin-bottom:14px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
-      <div style="font-size:13px;">Total de máquinas reservadas: <b style="color:#4f46e5;">${totalMaquinasDia} máquina(s)</b></div>
-      <button class="btn-primary" id="btnNovaReservaDia">+ Agendar Nesta Data</button>
+
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px; gap:8px;">
+      <span style="color:#6366f1; font-weight:bold; font-size:14px;">
+        Total de máquinas reservadas: <b style="color:#4f46e5;">${totalMaquinasDia} máquina(s)</b>
+      </span>
+      <button class="btn-primary" id="btnNovaSolDia" style="padding:8px 16px;">+ Agendar Nesta Data</button>
     </div>
-    <div class="table-container">
-      <div class="table" style="max-height:350px; overflow-y:auto;">
-        <table>
-          <tr>
-            <th>Professor Solicitante</th>
-            <th>Tipo</th>
-            <th>Segmento</th>
-            <th>Atividade / Matéria</th>
-            <th>Horários Reservados</th>
-            <th>Qtd. Máquinas</th>
-            <th>Data/Hora do Pedido</th>
+
+    <div class="table-container" style="max-height:380px; overflow-y:auto; border:1px solid rgba(255,255,255,0.08); border-radius:12px;">
+      <table style="width:100%; border-collapse:collapse; font-size:13px;">
+        <thead>
+          <tr style="border-bottom:1px solid rgba(255,255,255,0.1); text-align:left; color:var(--text-muted);">
+            <th style="padding:10px;">Professor Solicitante</th>
+            <th style="padding:10px;">Tipo</th>
+            <th style="padding:10px;">Segmento</th>
+            <th style="padding:10px;">Atividade / Matéria</th>
+            <th style="padding:10px;">Horários Reservados</th>
+            <th style="padding:10px;">Qtd. Máquinas</th>
+            <th style="padding:10px;">Ação</th>
           </tr>
-          ${list.map(g => {
-            const finObj = FINALIDADES.find(f => f.id === g.purpose);
-            const segLabel = g.segment === "8_9" ? "8º/9º Ano" : "6º/7º Ano";
-            return `<tr>
-              <td><b>👤 ${esc(g.userName)}</b></td>
-              <td>${g.type === "tablet" ? "📱 Tablet" : "💻 Notebook"}</td>
-              <td><small><b>${segLabel}</b></small></td>
-              <td><small>${finObj ? finObj.label : '📌 Outros'}</small></td>
-              <td><span class="pill reserved">${Array.from(g.lessonsNames).join(", ")}</span></td>
-              <td><b>${g.equipments.size} máq.</b></td>
-              <td><small class="muted">🕒 ${g.createdAt}</small></td>
-            </tr>`;
-          }).join("") || "<tr><td colspan=7>Nenhuma solicitação para esta data.</td></tr>"}
-        </table>
-      </div>
+        </thead>
+        <tbody>
+          ${listaLotes.map(lote => {
+            const listaAulasUnicas = Array.from(new Set(lote.aulasSlots));
+            const validEqs = Array.from(lote.equipamentos).filter(x => x && x !== "Pendente");
+            const qtdPedidaReal = lote.qtdTotalPedida || 1;
+            return `
+              <tr style="border-bottom:1px solid rgba(255,255,255,0.05);">
+                <td style="padding:12px 10px;">
+                  <b>👤 ${esc(lote.userName)}</b>
+                </td>
+                <td style="padding:12px 10px;">
+                  💻 ${esc(lote.type)}
+                </td>
+                <td style="padding:12px 10px;">
+                  <b>${esc(lote.segment)}</b>
+                </td>
+                <td style="padding:12px 10px;">
+                  📌 ${esc(lote.purposeLabel)}
+                </td>
+                <td style="padding:12px 10px;">
+                  <div style="display:flex; flex-direction:column; gap:4px;">
+                    ${listaAulasUnicas.map(a => `
+                      <span class="badge active" style="font-size:11px; padding:4px 8px; font-weight:normal; text-align:center;">
+                        ${esc(a)}
+                      </span>
+                    `).join("")}
+                  </div>
+                </td>
+                <td style="padding:12px 10px;">
+                  <b>${validEqs.length} / ${qtdPedidaReal} máq.</b>
+                </td>
+                <td style="padding:12px 10px;">
+                  <button class="btn-sm" onclick="modalAtribuirMaquinasLegado('${lote.batchId}')">📌 Atribuir</button>
+                </td>
+              </tr>
+            `;
+          }).join("")}
+        </tbody>
+      </table>
     </div>
   `);
 
   m.querySelector(".close").onclick = () => m.remove();
-  m.querySelector("#btnNovaReservaDia").onclick = () => {
+  m.querySelector("#btnNovaSolDia").onclick = () => {
+    const bloqDia = db.bloqueios.filter(b => b.date === dateStr);
+    if (bloqDia.some(b => b.lesson === "all") && user.role !== "admin") {
+      return alert("Esta data possui bloqueio de dia inteiro.");
+    }
     m.remove();
     modalReserva(dateStr);
   };
 }
 
-function reservas() {
-  const listaProfessores = db.users.filter(u => u.role === "professor" || u.role === "admin");
-
+/* TUTORIAL DO APLICATIVO */
+function tutorial() {
   $("main").innerHTML = `
     <div class="head">
-      <div><h2>Reservas por Lote</h2><div class="muted">Agendamentos registrados no sistema (157 equip. cadastrados)</div></div>
-      <button class="btn-primary" onclick="modalReserva()">+ Nova Reserva</button>
-    </div>
-
-    <div class="card" style="margin-bottom:16px;">
-      <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:10px; align-items:center;">
-        <input id="searchReserva" placeholder="🔍 Buscar ID, Matéria, Máquina..." style="width:100%;">
-        
-        <select id="filterProfReserva" style="width:100%;">
-          <option value="todos">👤 Todos os Professores</option>
-          ${listaProfessores.map(p => `<option value="${p.name}">${esc(p.name)}</option>`).join("")}
-        </select>
-
-        <div style="display:flex; gap:4px; align-items:center;">
-          <input id="filterDataReserva" type="date" style="width:100%;" title="Filtrar por Dia da Reserva">
-          <button type="button" id="btnReservaHoje" class="secondary" style="padding:8px 12px; font-size:12px; white-space:nowrap;">Hoje</button>
-        </div>
+      <div>
+        <h2>📖 Tutorial do Sistema</h2>
+        <div class="muted">Guia completo com todas as funções e recursos</div>
       </div>
     </div>
 
-    <div class="card">
-      <div id="reservasTableContainer">
-        ${renderizarTabelaReservas()}
+    <div class="card" style="display:flex; flex-direction:column; gap:16px;">
+      <div style="background:rgba(59, 130, 246, 0.08); padding:14px; border-radius:10px; border:1px solid rgba(59, 130, 246, 0.2);">
+        <h3 style="margin-bottom:6px; color:#38bdf8;">1. Dashboard (Visão Geral)</h3>
+        <p style="font-size:13px; color:var(--text-muted);">
+          Exibe a taxa de ocupação diária de notebooks e tablets, os empréstimos ativos no momento e a lista de saídas e retiradas já unificadas por professor.
+        </p>
       </div>
-    </div>`;
 
-  $("searchReserva").addEventListener("input", atualizarFiltroReservas);
-  $("filterProfReserva").addEventListener("change", atualizarFiltroReservas);
-  $("filterDataReserva").addEventListener("change", atualizarFiltroReservas);
-  $("btnReservaHoje").addEventListener("click", () => {
-    const hoje = new Date().toISOString().split("T")[0];
-    $("filterDataReserva").value = hoje;
-    atualizarFiltroReservas();
-  });
-}
+      <div style="background:rgba(59, 130, 246, 0.08); padding:14px; border-radius:10px; border:1px solid rgba(59, 130, 246, 0.2);">
+        <h3 style="margin-bottom:6px; color:#38bdf8;">2. Calendário e Régua de Ocupação</h3>
+        <p style="font-size:13px; color:var(--text-muted);">
+          Mostra os dias do mês com uma <b>régua colorida de 7 blocos</b> representando as aulas do dia:<br>
+          • <b style="color:#38bdf8;">Azul</b>: Ocupação baixa (1 até 30 máquinas)<br>
+          • <b style="color:#f59e0b;">Amarelo</b>: Ocupação média (30 a 70 máquinas)<br>
+          • <b style="color:#ef4444;">Vermelho</b>: Ocupação alta ou Bloqueio
+        </p>
+      </div>
 
-function atualizarFiltroReservas() {
-  const query = $("searchReserva") ? $("searchReserva").value.trim().toLowerCase() : "";
-  const prof = $("filterProfReserva") ? $("filterProfReserva").value : "todos";
-  const dataRes = $("filterDataReserva") ? $("filterDataReserva").value : "";
-  const container = $("reservasTableContainer");
+      <div style="background:rgba(59, 130, 246, 0.08); padding:14px; border-radius:10px; border:1px solid rgba(59, 130, 246, 0.2);">
+        <h3 style="margin-bottom:6px; color:#38bdf8;">3. Solicitações & Atribuição de Máquinas</h3>
+        <p style="font-size:13px; color:var(--text-muted);">
+          • <b>Atribuição Rápida</b>: Clique no prefixo desejado e digite os números separados por vírgula <code style="color:#38bdf8;">,</code>.<br>
+          • <b>Máquina Extra</b>: Marque a caixa se precisar adicionar mais máquinas do que o limite solicitado.
+        </p>
+      </div>
 
-  if (container) container.innerHTML = renderizarTabelaReservas(query, prof, dataRes);
-}
-
-function renderizarTabelaReservas(query = "", filterProf = "todos", filterData = "") {
-  const raw = user.role === "admin" ? db.reservas : db.reservas.filter(x => x && x.userId === user.id);
-  const groups = {};
-  
-  (raw || []).forEach(r => {
-    if (!r) return;
-    const bid = r.batchId || r.id;
-    if (!bid) return;
-
-    if (!groups[bid]) {
-      groups[bid] = { 
-        batchId: bid, 
-        userId: r.userId, 
-        userName: r.userName || "Usuário não identificado", 
-        date: r.date || "", 
-        type: r.type || "notebook", 
-        segment: r.segment || "6_7", 
-        purpose: r.purpose || "outros", 
-        lessonsIndices: new Set(), 
-        lessonsNames: new Set(), 
-        equipments: new Set(), 
-        createdAt: r.createdAt || "Data não registrada" 
-      };
-    }
-    if (r.lesson !== undefined) {
-      groups[bid].lessonsIndices.add(r.lesson);
-      const tabelaUsada = TABELAS_HORARIOS[r.segment || "6_7"] || TABELAS_HORARIOS["6_7"];
-      const slot = tabelaUsada[r.lesson];
-      groups[bid].lessonsNames.add(slot ? `${slot.label} (${slot.start}–${slot.end})` : r.lesson);
-    }
-    if (r.equipment) groups[bid].equipments.add(r.equipment);
-  });
-
-  let groupArray = Object.values(groups).sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-
-  if (filterProf && filterProf !== "todos") {
-    groupArray = groupArray.filter(g => g.userName === filterProf);
-  }
-
-  if (filterData) {
-    groupArray = groupArray.filter(g => g.date === filterData);
-  }
-
-  if (query) {
-    groupArray = groupArray.filter(g => {
-      const eqStr = Array.from(g.equipments).join(" ").toLowerCase();
-      const finObj = FINALIDADES.find(f => f.id === g.purpose);
-      const finLabel = finObj ? finObj.label.toLowerCase() : "";
-      const userNameStr = (g.userName || "").toLowerCase();
-      const batchIdStr = (g.batchId || "").toLowerCase();
-      const dateStr = g.date || "";
-
-      return userNameStr.includes(query) ||
-             batchIdStr.includes(query) ||
-             eqStr.includes(query) ||
-             finLabel.includes(query) ||
-             dateStr.includes(query);
-    });
-  }
-
-  return `
-    <div class="table-container">
-      <div class="table">
-        <table>
-          <tr><th>Professor</th><th>Data Uso</th><th>Tipo</th><th>Segmento</th><th>Atividade / Matéria</th><th>Horários</th><th>Qtd. Máquinas</th><th>Reservado em</th><th>Ações</th></tr>
-          ${groupArray.map(g => {
-            const finObj = FINALIDADES.find(f => f.id === g.purpose);
-            const segLabel = g.segment === "8_9" ? "8º/9º Ano" : "6º/7º Ano";
-            const dataFmt = g.date ? g.date.split('-').reverse().join('/') : "—";
-            return `<tr>
-              <td><b>👤 ${esc(g.userName)}</b></td>
-              <td><b>${dataFmt}</b></td>
-              <td>${g.type === "tablet" ? "📱 Tablet" : "💻 Notebook"}</td>
-              <td><small><b>${segLabel}</b></small></td>
-              <td><small>${finObj ? finObj.label : '📌 Outros'}</small></td>
-              <td><span class="pill reserved">${Array.from(g.lessonsNames).join(", ")}</span></td>
-              <td><b>${g.equipments.size} máq.</b></td>
-              <td><small class="muted">🕒 ${esc(g.createdAt)}</small></td>
-              <td>
-                ${(user.role === "admin" || user.id === g.userId) ? `
-                  <button class="secondary" onclick="editarReservaCompleta('${g.batchId}')">✏️ Editar Reserva</button>
-                  <button class="ok" onclick="modalMaquinasExtras('${g.batchId}')">➕ Extra (Máx 5)</button>
-                  <button class="danger" onclick="cancelarLote('${g.batchId}')">🗑️ Excluir</button>
-                ` : "—"}
-              </td>
-            </tr>`;
-          }).join("") || "<tr><td colspan=9>Nenhuma reserva encontrada com esses filtros.</td></tr>"}
-        </table>
+      <div style="background:rgba(59, 130, 246, 0.08); padding:14px; border-radius:10px; border:1px solid rgba(59, 130, 246, 0.2);">
+        <h3 style="margin-bottom:6px; color:#38bdf8;">4. Avarias e Histórico de Devoluções</h3>
+        <p style="font-size:13px; color:var(--text-muted);">
+          • <b>Avarias</b>: Registre defeitos e envie fotos.<br>
+          • <b>Histórico</b>: Acompanhe todas as devoluções efetuadas com data, hora e equipamento retornado.
+        </p>
       </div>
     </div>`;
 }
 
-function editarReservaCompleta(batchId) {
-  const loteReservas = db.reservas.filter(r => (r.batchId || r.id) === batchId);
-  if (!loteReservas.length) return alert("Reserva não encontrada.");
-
-  const isOwner = loteReservas.some(r => r.userId === user.id || r.userId === user.idDoc);
-  if (user.role !== "admin" && !isOwner) {
-    return alert("Você só pode editar suas próprias reservas.");
-  }
-
-  const exItem = loteReservas[0];
-  const qtyAtual = new Set(loteReservas.map(r => r.equipment)).size;
-  const selectedLessons = Array.from(new Set(loteReservas.map(r => parseInt(r.lesson, 10))));
-
-  abrirFormularioReserva({
-    batchId: batchId,
-    date: exItem.date,
-    type: exItem.type,
-    qty: qtyAtual,
-    selectedLessons: selectedLessons,
-    purpose: exItem.purpose,
-    segment: exItem.segment || "6_7"
-  });
-}
-
-function modalMaquinasExtras(batchId) {
-  const loteReservas = db.reservas.filter(r => (r.batchId || r.id) === batchId);
-  if (!loteReservas.length) return alert("Reserva não encontrada.");
-
-  const data = loteReservas[0].date;
-  const tipo = loteReservas[0].type;
-  const seg = loteReservas[0].segment || "6_7";
-  const aulas = Array.from(new Set(loteReservas.map(r => parseInt(r.lesson, 10))));
-  const userId = loteReservas[0].userId;
-  const userName = loteReservas[0].userName;
-
-  const m = modal(`
-    <div class="modal-top">
-      <h2>➕ Solicitar Máquinas Extras (Máximo 5)</h2>
-      <button class="close">&times;</button>
-    </div>
-    <form id="fextra">
-      <div class="form-grid">
-        <label>Quantidade de Extras (Máx. 5):
-          <input id="numExtra" type="number" min="1" max="5" value="1" required style="width:100%;">
-        </label>
-      </div>
-      <label style="margin-top:12px; display:block; font-size:12px; font-weight:600;">Motivo da Solicitação Extra:
-        <input id="motivoExtra" placeholder="Ex: Alunos novatos na turma / Dupla em projeto" required style="width:100%; margin-top:4px;">
-      </label>
-      <button class="btn-primary" style="margin-top:18px; width:100%">Confirmar Pedido Extra</button>
-    </form>
-  `);
-
-  m.querySelector(".close").onclick = () => m.remove();
-  m.querySelector("#fextra").onsubmit = e => {
-    e.preventDefault();
-    const qtn = parseInt($("numExtra").value, 10);
-    const motivo = $("motivoExtra").value.trim();
-
-    if (qtn > 5) return alert("O limite máximo é de 5 máquinas extras por solicitação.");
-    if (!motivo) return alert("Por favor, preencha o motivo do pedido extra.");
-
-    const horaCriacao = nowFormatted();
-    const tabelaUsada = TABELAS_HORARIOS[seg] || TABELAS_HORARIOS["6_7"];
-    const prefix = tipo === 'tablet' ? 'TAB' : 'M';
-
-    aulas.forEach(l => {
-      for (let i = 1; i <= qtn; i++) {
-        const rId = uid();
-        const eqId = `${prefix}_EX_${Date.now().toString(36)}_${i}`;
-        firestore.collection("reservas").add({ 
-          id: rId, batchId, userId, userName, date: data, lesson: l, segment: seg, equipment: eqId, type: tipo, status: "confirmed", createdAt: horaCriacao, motivoExtra: motivo 
-        });
-        firestore.collection("emprestimos").add({ 
-          id: uid(), reservationId: rId, batchId, userId, userName, date: data, lesson: `${tabelaUsada[l].label} (${tabelaUsada[l].start}–${tabelaUsada[l].end})`, segment: seg, equipment: eqId, status: "aguardando", createdAt: horaCriacao, motivoExtra: motivo 
-        });
-      }
-    });
-
-    alert(`${qtn} máquina(s) extra(s) adicionada(s) com sucesso!`);
-    m.remove();
-  };
-}
-
-function gerarPlanilhaMensalCSV() {
-  const mesAtual = String(calMonth + 1).padStart(2, "0");
-  const anoAtual = calYear;
-  const transacoes = db.emprestimos.filter(x => x.date && x.date.startsWith(`${anoAtual}-${mesAtual}`));
-
-  if (!transacoes.length) return alert(`Nenhuma transação encontrada no mês ${mesAtual}/${anoAtual}.`);
-
-  let csvContent = "\uFEFFID Transação;Professor;Data de Uso;Horário;Máquina;Status;Data/Hora Solicitação;Motivo Extra\n";
-  transacoes.forEach(t => csvContent += `"${t.id}";"${t.userName}";"${t.date}";"${t.lesson}";"${t.equipment}";"${t.status}";"${t.createdAt || 'N/A'}";"${t.motivoExtra || ''}"\n`);
-
-  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.setAttribute("href", url);
-  link.setAttribute("download", `Relatorio_Maquinas_${mesAtual}_${anoAtual}.csv`);
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-}
-
-function cancelarLote(batchId) {
-  if (confirm("Deseja cancelar todo este lote de reservas?")) {
-    db.reservas.filter(x => (x.batchId || x.id) === batchId).forEach(d => firestore.collection("reservas").doc(d.idDoc).delete());
-    db.emprestimos.filter(x => (x.batchId || x.id) === batchId).forEach(d => firestore.collection("emprestimos").doc(d.idDoc).delete());
-  }
-}
-
-function modalReserva(defaultDate = "") {
-  abrirFormularioReserva({ batchId: null, date: defaultDate, type: "notebook", qty: 1, selectedLessons: [], purpose: "redacao", segment: "6_7" });
-}
-
-function abrirFormularioReserva({ batchId, date, type, qty, selectedLessons = [], purpose, segment }) {
-  const hoje = date || new Date().toISOString().split("T")[0];
-  const isAdm = user.role === "admin";
-  const isEdit = !!batchId;
-  const segAtual = segment || "6_7";
-  const LIMITE_PROFESSOR = 35;
-
-  const m = modal(`
-    <div class="modal-top">
-      <h2>${isEdit ? "Editar Agendamento" : "Agendar Máquinas"}</h2>
-      <button class="close">&times;</button>
-    </div>
-    <form id="rf">
-      <div class="form-grid">
-        <label>Data
-          <input id="rd" type="date" value="${hoje}" min="${new Date().toISOString().split("T")[0]}" required style="width:100%;">
-        </label>
-        <label>Segmento / Turmas:
-          <select id="rsegment" style="width:100%;">
-            <option value="6_7" ${segAtual === "6_7" ? "selected" : ""}>6º e 7º Anos (Intervalo 09:30 | Almoço 12:20)</option>
-            <option value="8_9" ${segAtual === "8_9" ? "selected" : ""}>8º e 9º Anos (Intervalo 08:40 | Almoço 11:30)</option>
-          </select>
-        </label>
-        <label>Tipo de Equipamento
-          <select id="rt" style="width:100%;">
-            <option value="notebook" ${type === "notebook" ? "selected" : ""}>💻 Notebook</option>
-            <option value="tablet" ${type === "tablet" ? "selected" : ""}>📱 Tablet</option>
-          </select>
-        </label>
-        <label id="lblQty">Quantidade
-          <input id="rq" type="number" min="1" value="${qty}" required style="width:100%;">
-        </label>
-        <label>Atividade / Matéria
-          <select id="rpurpose" style="width:100%;">
-            ${FINALIDADES.map(f => `<option value="${f.id}" ${f.id === purpose ? "selected" : ""}>${f.label}</option>`).join("")}
-          </select>
-        </label>
-      </div>
-
-      <div style="margin-top:12px;">
-        <label style="font-weight:600; font-size:12px; display:block; margin-bottom:4px;">
-          Escolher Máquinas Específicas (Opcional):
-        </label>
-        <input id="rCustomMachines" placeholder="Ex: M88, PN90, SA3 (Separadas por vírgula)" style="width:100%;">
-        <small class="muted" style="display:block; margin-top:2px; font-size:11px;">Digite qualquer identificador rodando na escola. O sistema aceitará sem checagens rígidas.</small>
-      </div>
-
-      <div style="margin-top:16px">
-        <label style="margin-bottom:8px; font-weight:600; font-size:12px; display:block;">Selecione os Horários (Escolha de 1 até 6 horários):</label>
-        <div class="lessons-selector" id="lessonsContainer">
-          ${renderizarOpcoesHorario(segAtual, selectedLessons)}
-        </div>
-      </div>
-
-      <div id="ri" class="notice" style="margin-top:14px"></div>
-      <button class="btn-primary" style="margin-top:18px; width:100%">${isEdit ? "Salvar Alterações" : "Confirmar Agendamento"}</button>
-    </form>
-  `);
-
-  const getSelectedLessons = () => Array.from(m.querySelectorAll('input[name="lessonCheck"]:checked')).map(cb => parseInt(cb.value, 10));
-
-  const updateUI = () => {
-    const selected = getSelectedLessons();
-    const d = $("rd").value;
-
-    if (isPastDate(d) || isWeekend(d) || isHoliday(d)) {
-      $("ri").textContent = "A data selecionada não aceita reservas.";
-      $("ri").className = "notice danger-notice";
-      return;
-    }
-
-    if (selected.length === 0) {
-      $("ri").textContent = "Selecione pelo menos 1 horário para agendar.";
-      $("ri").className = "notice danger-notice";
-      return;
-    }
-
-    $("lblQty").querySelector("input").previousSibling.textContent = `Quantidade ${isAdm ? "(Sem limite)" : `(Máx. ${LIMITE_PROFESSOR})`}`;
-
-    $("ri").textContent = `${selected.length} horário(s) selecionado(s). Entrada livre de máquinas habilitada.`;
-    $("ri").className = "notice";
-  };
-
-  const bindCheckboxes = () => {
-    m.querySelectorAll('input[name="lessonCheck"]').forEach(cb => {
-      cb.addEventListener("change", e => {
-        const selected = getSelectedLessons();
-        if (selected.length > 6) {
-          e.target.checked = false;
-          alert("Você só pode agendar no máximo 6 horários por reserva.");
-        }
-        cb.closest('.lesson-checkbox').classList.toggle('checked', cb.checked);
-        updateUI();
-      });
-    });
-  };
-  bindCheckboxes();
-
-  m.querySelector("#rsegment").addEventListener("change", e => {
-    $("lessonsContainer").innerHTML = renderizarOpcoesHorario(e.target.value, getSelectedLessons());
-    bindCheckboxes();
-    updateUI();
-  });
-
-  ["rd", "rt"].forEach(id => $(id).addEventListener("change", updateUI));
-  m.querySelector(".close").onclick = () => m.remove();
-
-  m.querySelector("#rf").onsubmit = async e => {
-    e.preventDefault();
-    const currentSelectedLessons = getSelectedLessons();
-    const d = $("rd").value;
-    const seg = $("rsegment").value;
-    const t = $("rt").value;
-    const newQty = parseInt($("rq").value, 10);
-    const newPurpose = $("rpurpose").value;
-    const rawCustomMachines = $("rCustomMachines").value.trim();
-
-    if (isPastDate(d) || isWeekend(d) || isHoliday(d)) return alert("Data inválida ou bloqueada pelo calendário.");
-    if (currentSelectedLessons.length === 0) return alert("Selecione pelo menos 1 horário.");
-    if (!isAdm && newQty > LIMITE_PROFESSOR) return alert(`O limite máximo permitido por reserva é de ${LIMITE_PROFESSOR} máquinas.`);
-
-    let selecionadas = [];
-
-    if (rawCustomMachines) {
-      const customList = rawCustomMachines.split(/[,;\s]+/).map(x => x.trim().toUpperCase()).filter(Boolean);
-      selecionadas = customList.map(id => ({ id }));
-    } else {
-      const prefix = t === 'tablet' ? 'TAB' : 'M';
-      for (let i = 1; i <= newQty; i++) {
-        selecionadas.push({ id: `${prefix}${i}` });
-      }
-    }
-
-    if (isEdit) {
-      const oldRes = db.reservas.filter(x => (x.batchId || x.id) === batchId);
-      const oldEmp = db.emprestimos.filter(x => (x.batchId || x.id) === batchId);
-      await Promise.all(oldRes.map(x => firestore.collection("reservas").doc(x.idDoc).delete()));
-      await Promise.all(oldEmp.map(x => firestore.collection("emprestimos").doc(x.idDoc).delete()));
-    }
-
-    const currentBatchId = batchId || uid();
-    const horaCriacao = nowFormatted();
-    const tabelaUsada = TABELAS_HORARIOS[seg] || TABELAS_HORARIOS["6_7"];
-
-    currentSelectedLessons.forEach(l => {
-      selecionadas.forEach(eq => {
-        const rId = uid();
-        firestore.collection("reservas").add({ id: rId, batchId: currentBatchId, userId: user.id, userName: user.name, date: d, lesson: l, segment: seg, equipment: eq.id, type: t, status: "confirmed", purpose: newPurpose, createdAt: horaCriacao });
-        firestore.collection("emprestimos").add({ id: uid(), reservationId: rId, batchId: currentBatchId, userId: user.id, userName: user.name, date: d, lesson: `${tabelaUsada[l].label} (${tabelaUsada[l].start}–${tabelaUsada[l].end})`, segment: seg, equipment: eq.id, status: "aguardando", purpose: newPurpose, createdAt: horaCriacao });
-      });
-    });
-
-    m.remove();
-    nav("solicitacoes");
-  };
-
-  updateUI();
-}
-
+/* BLOQUEIOS */
 function bloqueios() {
   $("main").innerHTML = `
     <div class="head">
-      <div><h2>Bloqueios do Sistema</h2><div class="muted">Bloqueio de datas ou horários</div></div>
+      <div><h2>Bloqueios</h2><div class="muted">Gerenciar bloqueios por dia ou por aula</div></div>
       <button class="btn-primary" onclick="modalBloqueio()">+ Novo Bloqueio</button>
     </div>
     <div class="card">
       <div class="table-container">
-        <div class="table">
-          <table>
-            <tr><th>Data</th><th>Horário / Aula</th><th>Equipamento</th><th>Motivo</th><th>Ação</th></tr>
-            ${db.bloqueios.map(b => `<tr>
-              <td><b>${b.date.split('-').reverse().join('/')}</b></td>
-              <td>${b.lesson === "all" ? "🚨 Dia Inteiro" : `📌 Aula ${parseInt(b.lesson)+1}`}</td>
-              <td>${b.equipment === "all" ? "Todos" : b.equipment}</td>
-              <td>${esc(b.reason)}</td>
-              <td><button class="danger" onclick="delBlock('${b.idDoc}')">Excluir</button></td>
-            </tr>`).join("") || "<tr><td colspan=5>Nenhum bloqueio.</td></tr>"}
-          </table>
-        </div>
+        <table>
+          <thead><tr><th>Data</th><th>Escopo do Bloqueio</th><th>Motivo</th><th>Ação</th></tr></thead>
+          <tbody>
+            ${db.bloqueios.map(b => `
+              <tr>
+                <td><b>${b.date.split('-').reverse().join('/')}</b></td>
+                <td><span class="badge blocked">${b.lesson === "all" ? "🔒 Dia Inteiro" : `🔒 ${parseInt(b.lesson)+1}ª Aula`}</span></td>
+                <td>${esc(b.reason)}</td>
+                <td><button class="btn-sm danger" onclick="delBlock('${b.idDoc}')">Remover</button></td>
+              </tr>
+            `).join("") || "<tr><td colspan=4 class='muted' style='text-align:center;'>Nenhum bloqueio registrado.</td></tr>"}
+          </tbody>
+        </table>
       </div>
     </div>`;
 }
 
 function modalBloqueio() {
   const m = modal(`
-    <div class="modal-top"><h2>Bloqueio Administrativo</h2><button class="close">&times;</button></div>
-    <form id="bf">
-      <div class="form-grid">
-        <label>Data<input id="bd" type="date" required style="width:100%;"></label>
-        <label>Horário / Aula Afetada
-          <select id="bl" style="width:100%;">
-            <option value="all">🚨 Dia Inteiro (Todas as Aulas)</option>
-            ${TABELAS_HORARIOS["6_7"].map((a, i) => `<option value="${i}">📌 Apenas ${a.label} (${a.start}–${a.end})</option>`).join("")}
-          </select>
-        </label>
-      </div>
-      <label style="margin-top:12px; display:block; font-size:12px; font-weight:600;">Motivo do Bloqueio:
-        <input id="br" placeholder="Ex: Prova Brasil / Reunião de Pais / Prova" required style="width:100%; margin-top:4px;">
+    <div class="modal-top"><h2>Novo Bloqueio</h2><button class="close">&times;</button></div>
+    <form id="fBlk">
+      <label class="lbl">Data do Bloqueio
+        <input id="bd" type="date" class="inp" min="${new Date().toISOString().split("T")[0]}" required>
       </label>
-      <button class="btn-primary" style="margin-top:18px; width:100%">Confirmar Bloqueio</button>
-    </form>`);
-  m.querySelector(".close").onclick = () => m.remove();
-  m.querySelector("#bf").onsubmit = e => {
-    e.preventDefault();
-    firestore.collection("bloqueios").add({
-      id: uid(),
-      date: $("bd").value,
-      lesson: $("bl").value,
-      equipment: "all",
-      reason: $("br").value
+
+      <label class="lbl" style="margin-top:10px;"><b>Selecione o Escopo:</b></label>
+      <label class="check-aula-card" style="margin-bottom:8px;">
+        <input type="checkbox" id="blkAllDay" value="all">
+        <b>🔒 Bloquear Dia Inteiro</b>
+      </label>
+
+      <div id="blkLessonsList" class="filter-grid" style="grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));">
+        ${TABELAS_HORARIOS["6_7"].map((a, i) => `
+          <label class="check-aula-card">
+            <input type="checkbox" name="blkLesson" value="${i}"> 
+            <span>${a.label}</span>
+          </label>
+        `).join("")}
+      </div>
+
+      <label class="lbl" style="margin-top:10px;">Motivo
+        <input id="br" class="inp" placeholder="Ex: Prova / Reunião Geral" required>
+      </label>
+
+      <button type="submit" class="btn-primary" style="margin-top:16px; width:100%;">Salvar Bloqueio</button>
+    </form>
+  `);
+
+  const allDayCb = m.querySelector("#blkAllDay");
+  const lessonCbs = m.querySelectorAll('input[name="blkLesson"]');
+
+  allDayCb.onchange = () => {
+    lessonCbs.forEach(cb => {
+      cb.disabled = allDayCb.checked;
+      if (allDayCb.checked) cb.checked = false;
     });
+  };
+
+  m.querySelector(".close").onclick = () => m.remove();
+  m.querySelector("#fBlk").onsubmit = async e => {
+    e.preventDefault();
+    const d = $("bd").value;
+    const reason = $("br").value.trim();
+
+    if (allDayCb.checked) {
+      await firestore.collection("bloqueios").add({ id: uid(), date: d, lesson: "all", reason });
+    } else {
+      const selected = Array.from(m.querySelectorAll('input[name="blkLesson"]:checked')).map(cb => cb.value);
+      if (!selected.length) return alert("Selecione pelo menos uma aula ou marque Dia Inteiro.");
+
+      for (let l of selected) {
+        await firestore.collection("bloqueios").add({ id: uid(), date: d, lesson: l, reason });
+      }
+    }
+
+    alert("Bloqueio gravado!");
     m.remove();
   };
 }
 
 function delBlock(idDoc) {
-  firestore.collection("bloqueios").doc(idDoc).delete();
-}
-
-function modal(html, isSmall = false) {
-  const m = document.createElement("div");
-  m.className = "modal";
-  m.innerHTML = `<div class="modal-box ${isSmall ? 'modal-box-sm' : ''}">${html}</div>`;
-  document.body.appendChild(m);
-  return m;
-}
-
-function modalPWAInstalacao() {
-  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
-
-  const m = modal(`
-    <div class="modal-top" style="display:flex; justify-content:space-between; align-items:center;">
-      <h2>📲 Adicionar Atalho do Sistema</h2>
-      <button class="close">&times;</button>
-    </div>
-
-    <div class="notice danger-notice" style="margin-bottom:12px; font-size:13px; border-left:4px solid #ef4444; background:#fef2f2; padding:10px; border-radius:6px; color:#991b1b;">
-      ⚠️ <b>ATENÇÃO:</b> Utilize preferencialmente o navegador <b>GOOGLE CHROME</b>.<br>
-      ❌ Caso não esteja usando o Google Chrome, <b>consulte o PROATI!</b>
-    </div>
-    
-    ${deferredPrompt ? `
-      <div style="text-align:center; padding:10px 0;">
-        <button id="btnInstalarAuto" class="btn-primary" style="background:#10b981; font-size:15px; padding:12px; width:100%;">
-          ⚡ Criar Atalho na Tela Inicial
-        </button>
-      </div>
-    ` : isIOS ? `
-      <div style="font-size:13px; color:#334155;">
-        <p><b>No Safari (iPhone/iPad):</b> Toque no botão <b>Compartilhar (⎘)</b> e depois em <b>Adicionar à Tela de Início</b>.</p>
-        <button class="btn-primary" style="margin-top:12px; width:100%;" onclick="concluirTutorialPWA()">
-          ✅ Continuar
-        </button>
-      </div>
-    ` : `
-      <div style="font-size:13px; color:#334155;">
-        <p><b>No Google Chrome:</b> Clique nos <b>3 pontinhos (⋮)</b> no canto superior direito > <b>Instalar aplicativo</b> ou <b>Adicionar à tela inicial</b>.</p>
-        <button class="btn-primary" style="margin-top:12px; width:100%;" onclick="concluirTutorialPWA()">
-          ✅ Entendi
-        </button>
-      </div>
-    `}
-  `);
-
-  const closeBtn = m.querySelector(".close");
-  if (closeBtn) closeBtn.onclick = () => m.remove();
-
-  const btnAuto = document.getElementById("btnInstalarAuto");
-  if (btnAuto) {
-    btnAuto.onclick = async () => {
-      if (deferredPrompt) {
-        deferredPrompt.prompt();
-        const { outcome } = await deferredPrompt.userChoice;
-        if (outcome === 'accepted') concluirTutorialPWA();
-        deferredPrompt = null;
-      }
-    };
+  if (confirm("Remover este bloqueio?")) {
+    firestore.collection("bloqueios").doc(idDoc).delete();
   }
 }
-window.modalPWAInstalacao = modalPWAInstalacao;
 
-function dashboard() {
-  const hoje = new Date().toISOString().split("T")[0];
-  const resHoje = db.reservas.filter(r => r.date === hoje && r.status === "confirmed");
-  const noteResHojeUnique = new Set(resHoje.filter(r => r.type === "notebook").map(r => r.equipment)).size;
-  const tabResHojeUnique = new Set(resHoje.filter(r => r.type === "tablet").map(r => r.equipment)).size;
+/* AVARIAS */
+function avarias() {
+  $("main").innerHTML = `
+    <div class="head">
+      <div><h2>Central de Avarias</h2><div class="muted">Relatórios de manutenção com fotos</div></div>
+      <button class="btn-primary" onclick="modalReportDefeito()">+ Reportar Defeito</button>
+    </div>
+    <div class="card">
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Equipamento</th>
+              <th>Defeito</th>
+              <th>Foto</th>
+              <th>Reportado por</th>
+              <th>Status</th>
+              <th>Ações</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${(db.reports || []).map(r => `
+              <tr>
+                <td><b>[${esc(r.model)}] Nº ${esc(r.number)}</b></td>
+                <td>${esc(r.description)}</td>
+                <td>
+                  ${r.imageUrl ? `<button class="btn-sm" onclick="window.open('${esc(r.imageUrl)}', '_blank')">🖼️ Ver Foto</button>` : '<span class="muted">Sem foto</span>'}
+                </td>
+                <td>${esc(r.reporterName)}</td>
+                <td><span class="badge ${r.status === 'pendente' ? 'danger' : 'muted'}">${esc(r.status)}</span></td>
+                <td>
+                  <div style="display:flex; gap:4px;">
+                    ${user.role === "admin" ? `<button class="btn-sm" onclick="modalResponderReport('${r.idDoc}')">💬 Parecer</button>` : ''}
+                    ${user.role === "admin" ? `<button class="btn-sm danger" onclick="apagarReportAvaria('${r.idDoc}')">🗑️ Apagar</button>` : ''}
+                  </div>
+                </td>
+              </tr>
+            `).join("") || "<tr><td colspan=6 class='muted' style='text-align:center;'>Nenhum registro.</td></tr>"}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
 
-  const userRes = db.reservas.filter(r => r.userId === user.id && r.status === "confirmed");
-  const userBatchesCount = new Set(userRes.map(r => r.batchId || r.id)).size;
-  const empAtivos = new Set(db.emprestimos.filter(x => x.status === "retirado").map(x => x.equipment)).size;
+function apagarReportAvaria(idDoc) {
+  if (user.role !== "admin") return alert("Apenas administradores podem apagar chamados.");
+  if (confirm("Apagar este chamado permanentemente?")) {
+    firestore.collection("reports").doc(idDoc).delete();
+  }
+}
+
+function modalReportDefeito() {
+  const m = modal(`
+    <div class="modal-top"><h2>Reportar Defeito</h2><button class="close">&times;</button></div>
+    <form id="fReportDef">
+      <div class="filter-grid">
+        <label class="lbl">Modelo
+          <select id="repModel" class="inp" required>
+            ${MODELOS_EQUIPAMENTO.map(m => `<option value="${m.id}">${m.label}</option>`).join("")}
+          </select>
+        </label>
+        <label class="lbl">Número / ID
+          <input id="repNum" class="inp" placeholder="Ex: SA3, M12" required>
+        </label>
+      </div>
+
+      <label class="lbl" style="margin-top:10px;">Link da Imagem / Foto do Defeito (Opcional)
+        <input id="repImgUrl" class="inp" placeholder="https://exemplo.com/foto.jpg">
+      </label>
+
+      <label class="lbl" style="margin-top:10px;">Descrição do Problema
+        <textarea id="repDesc" class="inp" rows="3" placeholder="Descreva o problema..." required></textarea>
+      </label>
+      <button type="submit" class="btn-primary" style="margin-top:14px; width:100%;">Enviar Relato</button>
+    </form>
+  `);
+
+  m.querySelector(".close").onclick = () => m.remove();
+  m.querySelector("#fReportDef").onsubmit = async e => {
+    e.preventDefault();
+    await firestore.collection("reports").add({
+      id: uid(),
+      reporterId: user.id,
+      reporterName: user.name,
+      model: $("repModel").value,
+      number: $("repNum").value.trim(),
+      imageUrl: $("repImgUrl").value.trim(),
+      description: $("repDesc").value.trim(),
+      status: "pendente",
+      createdAt: nowFormatted()
+    });
+    m.remove();
+  };
+}
+
+function modalResponderReport(idDoc) {
+  const r = db.reports.find(x => x.idDoc === idDoc);
+  if (!r) return;
+
+  const m = modal(`
+    <div class="modal-top"><h2>Parecer Técnico</h2><button class="close">&times;</button></div>
+    <form id="fRepResp">
+      <p><b>Avaria:</b> ${esc(r.description)}</p>
+      <label class="lbl" style="margin-top:10px;">Comentário
+        <textarea id="admComm" class="inp" rows="3" required>${esc(r.adminComment || '')}</textarea>
+      </label>
+      <label class="lbl" style="margin-top:10px;">Status
+        <select id="admStatus" class="inp">
+          <option value="pendente" ${r.status === 'pendente' ? 'selected' : ''}>Pendente</option>
+          <option value="resolvido" ${r.status === 'resolvido' ? 'selected' : ''}>Resolvido</option>
+        </select>
+      </label>
+      <button type="submit" class="btn-primary" style="margin-top:14px; width:100%;">Atualizar</button>
+    </form>
+  `);
+  m.querySelector(".close").onclick = () => m.remove();
+  m.querySelector("#fRepResp").onsubmit = async e => {
+    e.preventDefault();
+    await firestore.collection("reports").doc(idDoc).update({
+      adminComment: $("admComm").value.trim(),
+      status: $("admStatus").value
+    });
+    m.remove();
+  };
+}
+
+/* USUÁRIOS */
+function usuarios() {
+  const isAdm = user && user.role === "admin";
 
   $("main").innerHTML = `
     <div class="head">
-      <div>
-        <h2>Painel Principal</h2>
-        <div class="muted">Escola Maria Olímpia de Souza Queiroz Maciel · Total: 157 máq. (146 Notebooks / 11 Tablets)</div>
-      </div>
-      <div style="display:flex; gap:8px; flex-wrap:wrap;">
-        <button class="secondary" onclick="modalPWAInstalacao()">📲 Criar Atalho</button>
-        <button class="ok" onclick="modalAgendamentoRapido()">⚡ Agendamento Rápido</button>
-        <button class="btn-primary" onclick="modalReserva()">+ Nova Reserva</button>
-        <button class="secondary" onclick="modalReportDefeito()">🛠️ Reportar Defeito</button>
-        ${user.role === "admin" ? `<button class="danger" onclick="encerrarEmprestimosApos1310()">⏰ Encerrar Empréstimos (13:10)</button>` : ''}
-      </div>
+      <div><h2>Usuários</h2><div class="muted">Cadastro e controle de acessos</div></div>
+      ${isAdm ? `<button class="btn-primary" onclick="modalUser()">+ Novo Usuário</button>` : ''}
     </div>
-
-    <div class="grid">
-      <div class="card stat">
-        <span>💻 Notebooks Agendados Hoje</span>
-        <b>${noteResHojeUnique} / 146 máq.</b>
+    <div class="card">
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Nome Completo</th>
+              <th>Login</th>
+              <th>Senha</th>
+              <th>Perfil</th>
+              ${isAdm ? `<th>Ações</th>` : ''}
+            </tr>
+          </thead>
+          <tbody>
+            ${db.users.map(u => `
+              <tr>
+                <td><b>${esc(u.name)}</b></td>
+                <td><code>${esc(u.userLogin || u.name)}</code></td>
+                <td><code>${esc(u.pass || "****")}</code></td>
+                <td><span class="badge ${u.role === 'admin' ? 'active' : ''}">${u.role === "admin" ? "Admin" : "Professor"}</span></td>
+                ${isAdm ? `
+                  <td>
+                    <div style="display:flex; gap:4px;">
+                      <button class="btn-sm" onclick="modalEditarUsuarioAdm('${u.idDoc}')">✏️ Editar</button>
+                      ${u.id !== "adm" ? `<button class="btn-sm danger" onclick="delUser('${u.idDoc}')">🗑️</button>` : ''}
+                    </div>
+                  </td>
+                ` : ''}
+              </tr>
+            `).join("")}
+          </tbody>
+        </table>
       </div>
-      <div class="card stat">
-        <span>📱 Tablets Agendados Hoje</span>
-        <b>${tabResHojeUnique} / 11 máq.</b>
-      </div>
-      <div class="card stat">
-        <span>📅 Seus Lotes de Reserva</span>
-        <b>${userBatchesCount}</b>
-      </div>
-      <div class="card stat">
-        <span>📦 Empréstimos Ativos</span>
-        <b>${empAtivos} máq.</b>
-      </div>
-    </div>
-
-    <div class="card section" style="margin-top:16px;">
-      <h3>🔴 Retiradas do Dia (${hoje.split('-').reverse().join('/')}) — Transparência Pública</h3>
-      ${usoTabela()}
     </div>`;
+}
+
+function modalUser() {
+  const m = modal(`
+    <div class="modal-top"><h2>Novo Usuário</h2><button class="close">&times;</button></div>
+    <form id="fUser">
+      <label class="lbl">Nome<input id="un" class="inp" required></label>
+      <label class="lbl" style="margin-top:8px;">Login<input id="ul" class="inp" required></label>
+      <label class="lbl" style="margin-top:8px;">Senha (4 números)<input id="up" type="password" maxlength="4" pattern="\\d{4}" class="inp" required></label>
+      <label class="lbl" style="margin-top:8px;">Perfil
+        <select id="ur" class="inp">
+          <option value="professor">Professor</option>
+          <option value="admin">Administrador</option>
+        </select>
+      </label>
+      <button type="submit" class="btn-primary" style="margin-top:14px; width:100%;">Cadastrar</button>
+    </form>
+  `);
+  m.querySelector(".close").onclick = () => m.remove();
+  m.querySelector("#fUser").onsubmit = async e => {
+    e.preventDefault();
+    const pass = $("up").value.trim();
+    if (pass.length !== 4 || isNaN(pass)) return alert("A senha deve conter 4 números.");
+
+    await firestore.collection("users").add({
+      id: uid(),
+      name: $("un").value.trim(),
+      userLogin: $("ul").value.trim().toLowerCase(),
+      pass: pass,
+      role: $("ur").value
+    });
+    m.remove();
+  };
+}
+
+function modalEditarUsuarioAdm(idDoc) {
+  const targetUser = db.users.find(u => u.idDoc === idDoc);
+  if (!targetUser) return alert("Usuário não encontrado.");
+
+  const m = modal(`
+    <div class="modal-top">
+      <h2>✏️ Editar Usuário</h2>
+      <button class="close">&times;</button>
+    </div>
+    <form id="fEditUserAdm">
+      <label class="lbl">Nome Completo
+        <input id="eUn" class="inp" value="${esc(targetUser.name)}" required>
+      </label>
+
+      <label class="lbl" style="margin-top:10px;">Login de Acesso
+        <input id="eUl" class="inp" value="${esc(targetUser.userLogin || targetUser.name)}" required>
+      </label>
+
+      <label class="lbl" style="margin-top:10px;">Senha (4 números)
+        <div style="display:flex; gap:4px;">
+          <input id="eUp" type="password" maxlength="4" pattern="\\d{4}" class="inp" value="${esc(targetUser.pass || '')}" required>
+          <button type="button" id="btnToggleUserPass" class="btn-secondary">👁️ Ver</button>
+        </div>
+      </label>
+
+      <label class="lbl" style="margin-top:10px;">Perfil
+        <select id="eUr" class="inp">
+          <option value="professor" ${targetUser.role === 'professor' ? 'selected' : ''}>Professor</option>
+          <option value="admin" ${targetUser.role === 'admin' ? 'selected' : ''}>Administrador</option>
+        </select>
+      </label>
+
+      <div style="margin-top:16px; display:flex; gap:6px;">
+        <button type="submit" class="btn-primary" style="flex:1;">Salvar Alterações</button>
+        <button type="button" class="btn-secondary close-btn" style="flex:1;">Cancelar</button>
+      </div>
+    </form>
+  `);
+
+  const passInp = m.querySelector("#eUp");
+  const toggleBtn = m.querySelector("#btnToggleUserPass");
+
+  toggleBtn.onclick = () => {
+    if (passInp.type === "password") {
+      passInp.type = "text";
+      toggleBtn.textContent = "🙈 Ocultar";
+    } else {
+      passInp.type = "password";
+      toggleBtn.textContent = "👁️ Ver";
+    }
+  };
+
+  m.querySelectorAll(".close, .close-btn").forEach(b => b.onclick = () => m.remove());
+
+  m.querySelector("#fEditUserAdm").onsubmit = async e => {
+    e.preventDefault();
+    const pass = $("eUp").value.trim();
+    if (pass.length !== 4 || isNaN(pass)) return alert("A senha deve conter 4 números.");
+
+    await firestore.collection("users").doc(idDoc).update({
+      name: $("eUn").value.trim(),
+      userLogin: $("eUl").value.trim().toLowerCase(),
+      pass: pass,
+      role: $("eUr").value
+    });
+    alert("Usuário atualizado!");
+    m.remove();
+  };
+}
+
+function delUser(idDoc) {
+  if (confirm("Excluir usuário?")) firestore.collection("users").doc(idDoc).delete();
+}
+
+function modalPWAInstalacao() {
+  const m = modal(`
+    <div class="modal-top">
+      <h2>📲 Como Criar Atalho na Tela Inicial</h2>
+      <button class="close">&times;</button>
+    </div>
+
+    <div style="display:flex; flex-direction:column; gap:14px; font-size:13px; max-height:380px; overflow-y:auto; padding-right:4px;">
+      <div style="background:rgba(255,255,255,0.03); padding:10px; border-radius:8px; border:1px solid var(--border);">
+        <b style="color:#38bdf8;">🤖 Android (Chrome)</b>
+        <p style="margin-top:4px; color:var(--text-muted);">1. Clique nos 3 pontinhos (⋮) no canto superior direito.<br>2. Toque em <b>"Adicionar à tela inicial"</b> ou <b>"Instalar aplicativo"</b>.</p>
+      </div>
+
+      <div style="background:rgba(255,255,255,0.03); padding:10px; border-radius:8px; border:1px solid var(--border);">
+        <b style="color:#f43f5e;">🍎 iPhone / iPad (Safari)</b>
+        <p style="margin-top:4px; color:var(--text-muted);">1. Toque no ícone de <b>Compartilhar</b> (quadrado com seta para cima na barra inferior).<br>2. Role para baixo e toque em <b>"Adicionar à Tela de Início"</b>.</p>
+      </div>
+
+      <div style="background:rgba(255,255,255,0.03); padding:10px; border-radius:8px; border:1px solid var(--border);">
+        <b style="color:#10b981;">💻 Computador / Chromebook (Chrome / Edge)</b>
+        <p style="margin-top:4px; color:var(--text-muted);">1. Clique no ícone de tela/instalação ao lado da barra de endereço URL.<br>2. Ou vá em Menu (⋮) &gt; <b>Mais ferramentas</b> &gt; <b>Criar atalho...</b></p>
+      </div>
+    </div>
+
+    <button class="btn-primary close-btn" style="margin-top:16px; width:100%;">Entendi</button>
+  `);
+
+  m.querySelectorAll(".close, .close-btn").forEach(b => b.onclick = () => m.remove());
+}
+
+/* CRIAR NOVA SOLICITAÇÃO */
+function modalReserva(defaultDate = "") {
+  const hoje = defaultDate || new Date().toISOString().split("T")[0];
+
+  const m = modal(`
+    <div class="modal-top">
+      <h2>Nova Solicitação</h2>
+      <button class="close">&times;</button>
+    </div>
+    <form id="fSolNew">
+      <div class="filter-grid">
+        <label class="lbl">Data de Uso
+          <input id="rsDate" type="date" value="${hoje}" min="${new Date().toISOString().split("T")[0]}" class="inp" required>
+        </label>
+        <label class="lbl">Segmento
+          <select id="rsSeg" class="inp">
+            <option value="6_7">6º e 7º Anos</option>
+            <option value="8_9">8º e 9º Anos</option>
+          </select>
+        </label>
+        <label class="lbl">Quantidade de Máquinas
+          <input id="rsQty" type="number" min="1" max="40" value="1" class="inp" required>
+        </label>
+        <label class="lbl">Atividade
+          <select id="rsPurpose" class="inp">
+            ${FINALIDADES.map(f => `<option value="${f.id}">${f.label}</option>`).join("")}
+          </select>
+        </label>
+      </div>
+
+      <div style="margin-top:14px;">
+        <label class="lbl"><b>Selecione as Aulas:</b></label>
+        <div id="lessonsCheckboxes" class="filter-grid" style="grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));">
+          ${TABELAS_HORARIOS["6_7"].map((a, i) => `
+            <label class="check-aula-card">
+              <input type="checkbox" name="solLesson" value="${i}"> 
+              <div>
+                <b>${a.label}</b>
+                <span style="font-size:10px; color:var(--text-muted);">${a.start} às ${a.end}</span>
+              </div>
+            </label>
+          `).join("")}
+        </div>
+      </div>
+
+      <button type="submit" class="btn-primary" style="margin-top:18px; width:100%;">Confirmar Solicitação</button>
+    </form>
+  `);
+
+  m.querySelector("#rsSeg").onchange = (e) => {
+    const segKey = e.target.value;
+    const listaAulas = TABELAS_HORARIOS[segKey] || TABELAS_HORARIOS["6_7"];
+    m.querySelector("#lessonsCheckboxes").innerHTML = listaAulas.map((a, i) => `
+      <label class="check-aula-card">
+        <input type="checkbox" name="solLesson" value="${i}"> 
+        <div>
+          <b>${a.label}</b>
+          <span style="font-size:10px; color:var(--text-muted);">${a.start} às ${a.end}</span>
+        </div>
+      </label>
+    `).join("");
+  };
+
+  m.querySelector(".close").onclick = () => m.remove();
+
+  m.querySelector("#fSolNew").onsubmit = async e => {
+    e.preventDefault();
+    const d = $("rsDate").value;
+    const seg = $("rsSeg").value;
+    const qty = parseInt($("rsQty").value, 10);
+    const purp = $("rsPurpose").value;
+    const selectedLessons = Array.from(m.querySelectorAll('input[name="solLesson"]:checked')).map(cb => parseInt(cb.value, 10));
+
+    const bloqDia = db.bloqueios.filter(b => b.date === d);
+    if (bloqDia.some(b => b.lesson === "all") && user.role !== "admin") {
+      return alert("Esta data possui um bloqueio de DIA INTEIRO registrado.");
+    }
+
+    if (isPastDate(d) || isWeekend(d) || isHoliday(d)) return alert("Data indisponível para solicitações.");
+    if (!selectedLessons.length) return alert("Selecione pelo menos uma aula.");
+
+    const batchId = uid();
+    const horaCriacao = nowFormatted();
+    const tabelaUsada = TABELAS_HORARIOS[seg] || TABELAS_HORARIOS["6_7"];
+
+    const labelsAulas = selectedLessons.map(lIdx => {
+      const slot = tabelaUsada[lIdx];
+      return slot ? `${slot.label}` : `Aula ${lIdx + 1}`;
+    });
+
+    try {
+      await firestore.collection("emprestimos").add({
+        id: uid(),
+        batchId: batchId,
+        userId: user.id || user.idDoc,
+        userName: user.name,
+        date: d,
+        lessons: labelsAulas,
+        lessonIndexes: selectedLessons,
+        segment: seg,
+        equipments: ["Pendente"],
+        qtdTotalPedida: qty,
+        purpose: purp,
+        status: "aguardando",
+        createdAt: horaCriacao
+      });
+
+      alert("Solicitação criada como Pendente!");
+      m.remove();
+      nav("solicitacoes");
+    } catch (err) {
+      alert("Erro ao criar solicitação: " + err.message);
+    }
+  };
+}
+
+function modal(html) {
+  const m = document.createElement("div");
+  m.className = "modal";
+  m.innerHTML = `<div class="modal-box">${html}</div>`;
+  document.body.appendChild(m);
+  return m;
 }
