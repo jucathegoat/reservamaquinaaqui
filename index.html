@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>reservamaquinaaqui</title>
+  <link rel="stylesheet" href="style.css">
+  
+  <!-- Firebase SDKs -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+</head>
+<body>
+
+  <!-- TELA DE LOGIN -->
+  <div id="login">
+    <div class="login-card">
+      <div class="login-header">
+        <span class="icon-laptop">💻</span>
+        <h2>reservamaquinaaqui</h2>
+        <p class="muted">Escola Maria Olímpia de Souza Queiroz Maciel</p>
+      </div>
+
+      <form id="loginForm">
+        <div class="field-group">
+          <label class="lbl" for="loginUser">Usuário</label>
+          <input id="loginUser" class="inp" placeholder="Digite seu usuário" required autocomplete="username">
+        </div>
+
+        <div class="field-group">
+          <label class="lbl" for="loginPass">Senha</label>
+          <input id="loginPass" type="password" maxlength="4" pattern="\d{4}" class="inp" placeholder="4 dígitos" required autocomplete="current-password">
+        </div>
+
+        <div id="loginError" class="login-error-msg"></div>
+
+        <button type="submit" class="login-btn">Entrar no Sistema</button>
+      </form>
+
+      <div class="login-footer">
+        <button type="button" class="btn-first-access" onclick="modalPrimeiroAcesso()">
+          🆕 Primeiro Acesso? Cadastre-se aqui
+        </button>
+        <button type="button" class="btn-secondary" style="width:100%; font-size:12px; margin-top:8px;" onclick="modalPWAInstalacao()">
+          📲 Como Criar Atalho / Instalar App
+        </button>
+        <span class="muted-sm" style="margin-top:8px;">Sistema Sincronizado em Nuvem</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- APLICAÇÃO PRINCIPAL -->
+  <div id="app" class="hidden">
+    <header>
+      <h1>reservamaquinaaqui</h1>
+      <div id="who"></div>
+    </header>
+
+    <nav id="nav"></nav>
+
+    <main id="main"></main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
