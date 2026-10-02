@@ -22,8 +22,8 @@ if (!firebase.apps.length) {
   firebase.initializeApp(firebaseConfig);
 }
 const firestore = firebase.firestore();
-
 const SESSION_KEY = "controle_sessao_proati_v44";
+const USER_CACHE_KEY = "controle_user_data_v35";
 
 const MODELOS_EQUIPAMENTO = [
   { id: "M", label: "M (Multilaser)" },
@@ -231,6 +231,12 @@ function verificarSessaoSalva() {
       }
     } catch (e) {}
   }
+  const savedDocId = localStorage.getItem(SESSION_KEY);
+  if (savedDocId && !cachedUserData) {
+    firestore.collection("users").doc(savedDocId).get().then(doc => {
+      if (doc.exists) iniciarSessao({ idDoc: doc.id, ...doc.data() });
+    }).catch(() => {});
+  }
 }
 
 if (document.readyState === "loading") {
@@ -242,7 +248,8 @@ if (document.readyState === "loading") {
 function iniciarSessao(u) {
   user = u;
   localStorage.setItem(SESSION_KEY, JSON.stringify(u));
-  
+  if (u.idDoc) localStorage.setItem(USER_CACHE_KEY, JSON.stringify(u));
+
   $("login").classList.add("hidden");
   $("app").classList.remove("hidden");
 
@@ -259,6 +266,7 @@ function iniciarSessao(u) {
 function encerrarSessao() {
   user = null;
   localStorage.removeItem(SESSION_KEY);
+  localStorage.removeItem(USER_CACHE_KEY);
   $("app").classList.add("hidden");
   $("login").classList.remove("hidden");
 }
@@ -367,7 +375,7 @@ function modalEditarMeuPerfil() {
       <label class="lbl" style="margin-top:10px;">Senha (4 números)
         <div style="display:flex; gap:6px;">
           <input id="mpPass" type="password" maxlength="4" pattern="\\d{4}" class="inp" value="${esc(currentUser.pass)}" required>
-          <button type="button" id="btnTogglePass" class="btn-secondary">👁️ Ver</button>
+          <button type="button" id="btnTogglePass" class="btn-secondary">👁️️ Ver</button>
         </div>
       </label>
 
@@ -409,6 +417,7 @@ function modalEditarMeuPerfil() {
       user.userLogin = l;
       user.pass = p;
       localStorage.setItem(SESSION_KEY, JSON.stringify(user));
+      localStorage.setItem(USER_CACHE_KEY, JSON.stringify(user));
 
       alert("Perfil atualizado com sucesso!");
       m.remove();
@@ -1340,8 +1349,8 @@ function modalEditarReserva(batchId) {
         <input id="eDate" type="date" value="${itemPrincipal.date}" class="inp" required>
       </label>
 
-      <label class="lbl" style="margin-top:10px;">Quantidade Pedida
-        <input id="eQty" type="number" min="1" max="50" value="${qtdAtual}" class="inp" required>
+      <label class="lbl" style="margin-top:10px;">Quantidade Pedida (Máx. 30)
+        <input id="eQty" type="number" min="1" max="30" value="${qtdAtual}" class="inp" required>
       </label>
 
       <button type="submit" class="btn-primary" style="margin-top:16px; width:100%;">Salvar Alterações</button>
@@ -1355,8 +1364,8 @@ function modalEditarReserva(batchId) {
     const novaData = $("eDate").value;
     const novaQtd = parseInt($("eQty").value, 10);
 
-    if (novaQtd > 5 && user.role !== "admin") {
-      return alert("🚫 Limite excedido: Cada professor pode solicitar no máximo 5 máquinas por dia.");
+    if (novaQtd > 30 && user.role !== "admin") {
+      return alert("🚫 Limite excedido: Cada solicitação pode ter no máximo 30 máquinas.");
     }
 
     try {
@@ -1707,9 +1716,9 @@ function tutorial() {
 
     <div class="card" style="display:flex; flex-direction:column; gap:16px;">
       <div style="background:rgba(59, 130, 246, 0.08); padding:14px; border-radius:10px; border:1px solid rgba(59, 130, 246, 0.2);">
-        <h3 style="margin-bottom:6px; color:#38bdf8;">1. Limite Máximo de Reservas</h3>
+        <h3 style="margin-bottom:6px; color:#38bdf8;">1. Limite por Solicitação</h3>
         <p style="font-size:13px; color:var(--text-muted);">
-          Cada professor pode solicitar no máximo 5 máquinas por dia. O campo de quantidade já vem limitado e validado.
+          Cada professor pode solicitar até 30 máquinas por lote/solicitação.
         </p>
       </div>
     </div>`;
@@ -2087,37 +2096,7 @@ function delUser(idDoc) {
   if (confirm("Excluir usuário?")) firestore.collection("users").doc(idDoc).delete();
 }
 
-function modalPWAInstalacao() {
-  const m = modal(`
-    <div class="modal-top">
-      <h2>📲 Como Criar Atalho na Tela Inicial</h2>
-      <button class="close">&times;</button>
-    </div>
-
-    <div style="display:flex; flex-direction:column; gap:14px; font-size:13px; max-height:380px; overflow-y:auto; padding-right:4px;">
-      <div style="background:rgba(255,255,255,0.03); padding:10px; border-radius:8px; border:1px solid var(--border);">
-        <b style="color:#38bdf8;">🤖 Android (Chrome)</b>
-        <p style="margin-top:4px; color:var(--text-muted);">1. Clique nos 3 pontinhos (⋮) no canto superior direito.<br>2. Toque em <b>"Adicionar à tela inicial"</b> ou <b>"Instalar aplicativo"</b>.</p>
-      </div>
-
-      <div style="background:rgba(255,255,255,0.03); padding:10px; border-radius:8px; border:1px solid var(--border);">
-        <b style="color:#f43f5e;">🍎 iPhone / iPad (Safari)</b>
-        <p style="margin-top:4px; color:var(--text-muted);">1. Toque no ícone de <b>Compartilhar</b> (quadrado com seta para cima na barra inferior).<br>2. Role para baixo e toque em <b>"Adicionar à Tela de Início"</b>.</p>
-      </div>
-
-      <div style="background:rgba(255,255,255,0.03); padding:10px; border-radius:8px; border:1px solid var(--border);">
-        <b style="color:#10b981;">💻 Computador / Chromebook (Chrome / Edge)</b>
-        <p style="margin-top:4px; color:var(--text-muted);">1. Clique no ícone de tela/instalação ao lado da barra de endereço URL.<br>2. Ou vá em Menu (⋮) &gt; <b>Mais ferramentas</b> &gt; <b>Criar atalho...</b></p>
-      </div>
-    </div>
-
-    <button class="btn-primary close-btn" style="margin-top:16px; width:100%;">Entendi</button>
-  `);
-
-  m.querySelectorAll(".close, .close-btn").forEach(b => b.onclick = () => m.remove());
-}
-
-/* CRIAR NOVA SOLICITAÇÃO COM LIMITE MÁXIMO DE 5 MÁQUINAS POR DIA */
+/* CRIAR NOVA SOLICITAÇÃO (ATÉ 30 MÁQUINAS POR LOTE) */
 function modalReserva(defaultDate = "") {
   const hoje = defaultDate || new Date().toISOString().split("T")[0];
 
@@ -2143,8 +2122,8 @@ function modalReserva(defaultDate = "") {
             <option value="8_9">8º e 9º Anos</option>
           </select>
         </label>
-        <label class="lbl">Quantidade de Máquinas (Máx. 5)
-          <input id="rsQty" type="number" min="1" max="5" value="1" class="inp" required>
+        <label class="lbl">Quantidade de Máquinas (Máx. 30)
+          <input id="rsQty" type="number" min="1" max="30" value="1" class="inp" required>
         </label>
         <label class="lbl">Atividade
           <select id="rsPurpose" class="inp">
@@ -2197,9 +2176,8 @@ function modalReserva(defaultDate = "") {
     const purp = $("rsPurpose").value;
     const selectedLessons = Array.from(m.querySelectorAll('input[name="solLesson"]:checked')).map(cb => parseInt(cb.value, 10));
 
-    // Validação do limite máximo de 5 máquinas por dia para professores
-    if (qty > 5 && user.role !== "admin") {
-      return alert("🚫 Limite excedido: Cada professor pode solicitar no máximo 5 máquinas por dia.");
+    if (qty > 30 && user.role !== "admin") {
+      return alert("🚫 Limite excedido: Cada solicitação pode ter no máximo 30 máquinas.");
     }
 
     const bloqDia = db.bloqueios.filter(b => b.date === d);
