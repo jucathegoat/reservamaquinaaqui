@@ -1,5 +1,5 @@
 # 💻 Sistema de Reserva de Equipamentos (PROATI)
-> **Escola Maria Olímpia de Souza Queiroz Maciel**
+ *Escola Maria Olímpia de Souza Queiroz Maciel*
 
 Sistema web em tempo real para gerenciamento, reserva e controle de entrega de notebooks e tablets educacionais para corpo docente e equipe administrativa.
 
