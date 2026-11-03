@@ -20,20 +20,28 @@ export function escapeHtml(str) {
 
 const loginValido = l => /^[a-z._-]+$/.test(l); // sem espaços, números ou acentos
 
-// ---------- Rotas das telas de autenticação ----------
-function gerenciarRotasAuth() {
-  const hash = window.location.hash || "#inicio";
+// ---------- Rotas das telas de autenticação (Sem Hash no URL) ----------
+export function mudarTelaAuth(rota) {
   const telaInicio = document.getElementById("welcomeScreen") || document.getElementById("tela-inicio");
   const telaLogin = document.getElementById("loginScreen") || document.getElementById("tela-login");
   const telaRegistro = document.getElementById("registerScreen") || document.getElementById("tela-registro");
   if (!telaInicio || !telaLogin || !telaRegistro) return;
 
   [telaInicio, telaLogin, telaRegistro].forEach(t => t.classList.remove("active", "ativa"));
-  if (hash === "#entrar") telaLogin.classList.add("active");
-  else if (hash === "#cadastro") telaRegistro.classList.add("active");
-  else telaInicio.classList.add("active");
+
+  if (rota === "entrar") {
+    telaLogin.classList.add("active");
+  } else if (rota === "cadastro") {
+    telaRegistro.classList.add("active");
+  } else {
+    telaInicio.classList.add("active");
+  }
+
+  // Remove qualquer hash remanescente do URL de forma limpa sem recarregar a página
+  if (window.history && window.history.replaceState) {
+    window.history.replaceState('', document.title, window.location.pathname);
+  }
 }
-window.addEventListener("hashchange", gerenciarRotasAuth);
 
 // ---------- Gestão de Sessão Local (LocalStorage) ----------
 const SESSION_KEY = "proati_session_user";
@@ -54,6 +62,8 @@ export function verificarSessaoSalva(callbackIniciado) {
 }
 
 export function iniciarSessao(u, callbackNav) {
+  if (window.mostrarLoader) window.mostrarLoader("A iniciar sessão...");
+  
   user = u;
   window.user = u;
   localStorage.setItem(SESSION_KEY, JSON.stringify(u));
@@ -88,12 +98,16 @@ export function iniciarSessao(u, callbackNav) {
       localStorage.removeItem(SESSION_KEY);
       user = null;
       window.user = null;
-      window.location.hash = "#inicio";
+      mudarTelaAuth("inicio");
       window.location.reload();
     };
   }
 
   if (callbackNav) callbackNav("dashboard");
+  
+  setTimeout(() => {
+    if (window.esconderLoader) window.esconderLoader();
+  }, 200);
 }
 
 // ---------- Editar meu perfil (nome e PIN) ----------
@@ -132,10 +146,13 @@ export function modalEditarMeuPerfil() {
 
   document.getElementById("fMeuPerfil").onsubmit = async (e) => {
     e.preventDefault();
+    if (window.mostrarLoader) window.mostrarLoader("A atualizar perfil...");
+    
     const nome = document.getElementById("mpNome").value.trim();
     const novoPin = document.getElementById("mpPass").value.trim();
 
     if (novoPin && !/^\d{4}$/.test(novoPin)) {
+      if (window.esconderLoader) window.esconderLoader();
       alert("O PIN deve conter exatamente 4 números.");
       return;
     }
@@ -153,28 +170,31 @@ export function modalEditarMeuPerfil() {
       iniciarSessao(user, window.nav);
     } catch (err) {
       alert("Erro ao atualizar perfil: " + err.message);
+    } finally {
+      if (window.esconderLoader) window.esconderLoader();
     }
   };
 }
 
+// ---------- Constantes de Segurança de Registo ----------
+const TEMPO_BLOQUEIO_DISPOSITIVO = 24 * 60 * 60 * 1000; // 24 horas em ms
+const CHAVE_DEVICE_REGISTRO = "proati_ultimo_registro_dispositivo";
+
 // ---------- Eventos de tela ----------
 document.addEventListener("DOMContentLoaded", () => {
-  gerenciarRotasAuth();
+  mudarTelaAuth("inicio");
 
   document.addEventListener("click", (e) => {
-    const linkTarget = e.target.closest('a[href="#entrar"], a[href="#cadastro"], a[href="#inicio"], #btnIrParaLogin, #btnIrParaPrimeiroAcesso, #btnVoltarWelcome, #btnVoltarLogin');
-    if (linkTarget) {
-      if (linkTarget.id === "btnIrParaLogin" || linkTarget.getAttribute("href") === "#entrar") {
-        e.preventDefault();
-        window.location.hash = "#entrar";
-      } else if (linkTarget.id === "btnIrParaPrimeiroAcesso" || linkTarget.getAttribute("href") === "#cadastro") {
-        e.preventDefault();
-        window.location.hash = "#cadastro";
-      } else {
-        e.preventDefault();
-        window.location.hash = "#inicio";
+    const target = e.target.closest('#btnIrParaLogin, #btnIrParaPrimeiroAcesso, #btnVoltarWelcome, #btnVoltarLogin');
+    if (target) {
+      e.preventDefault();
+      if (target.id === "btnIrParaLogin") {
+        mudarTelaAuth("entrar");
+      } else if (target.id === "btnIrParaPrimeiroAcesso") {
+        mudarTelaAuth("cadastro");
+      } else if (target.id === "btnVoltarWelcome" || target.id === "btnVoltarLogin") {
+        mudarTelaAuth("inicio");
       }
-      gerenciarRotasAuth();
     }
   });
 
@@ -188,7 +208,7 @@ document.addEventListener("DOMContentLoaded", () => {
     };
   }
 
- // ----- LOGIN COM RATE LIMITING E VALIDAÇÃO DE SEGURANÇA -----
+  // ----- LOGIN COM RATE LIMITING E VALIDAÇÃO DE SEGURANÇA -----
   const loginForm = document.getElementById("loginForm");
   if (loginForm) {
     let ultimaTentativa = 0;
@@ -228,6 +248,8 @@ document.addEventListener("DOMContentLoaded", () => {
         return mostrarErro("O PIN deve conter exatamente 4 números.");
       }
 
+      if (window.mostrarLoader) window.mostrarLoader("A validar credenciais...");
+
       try {
         const snap = await firestore.collection("users").where("login", "==", loginInput).get();
         if (snap.empty) {
@@ -266,11 +288,13 @@ document.addEventListener("DOMContentLoaded", () => {
       } catch (err) {
         console.error("Erro no login:", err);
         mostrarErro("Erro de conexão com o banco de dados. Tente novamente.");
+      } finally {
+        if (window.esconderLoader) window.esconderLoader();
       }
     };
   }
 
-  // ----- CADASTRO DIRETO NO FIRESTORE -----
+  // ----- CADASTRO DIRETO NO FIRESTORE (COM TRAVAS DE SEGURANÇA) -----
   const registroForm = document.getElementById("registroForm") || document.getElementById("registerForm");
   if (registroForm) {
     registroForm.onsubmit = async (e) => {
@@ -285,6 +309,18 @@ document.addEventListener("DOMContentLoaded", () => {
       const mostrarErro = msg => { if (errEl) { errEl.textContent = msg; errEl.hidden = false; } };
 
       if (!nome || nome.length > 80) return mostrarErro("Informe um nome válido (até 80 caracteres).");
+
+      // TRAVA 1: BLOQUEIO DE 24H POR DISPOSITIVO
+      const ultimoRegistroDisp = localStorage.getItem(CHAVE_DEVICE_REGISTRO);
+      const agora = Date.now();
+      if (ultimoRegistroDisp) {
+        const tempoDecorrido = agora - parseInt(ultimoRegistroDisp, 10);
+        if (tempoDecorrido < TEMPO_BLOQUEIO_DISPOSITIVO) {
+          const horasRestantes = Math.ceil((TEMPO_BLOQUEIO_DISPOSITIVO - tempoDecorrido) / (1000 * 60 * 60));
+          return mostrarErro(`🚫 Este dispositivo já efetuou um registo recentemente. Aguarde ${horasRestantes} hora(s) para criar outra conta.`);
+        }
+      }
+
       if (!loginValido(login)) return mostrarErro("Erro: o login deve ter apenas letras (sem espaços, números ou acentos).");
       if (!/^\d{4}$/.test(pin)) return mostrarErro("Erro: a senha deve conter exatamente 4 números.");
       if (!["manhã", "tarde", "ambos"].includes(turno)) return mostrarErro("Turno inválido.");
@@ -298,10 +334,31 @@ document.addEventListener("DOMContentLoaded", () => {
         }
       }
 
+      if (window.mostrarLoader) window.mostrarLoader("A efetuar registo...");
+
       try {
+        // TRAVA 2: VERIFICAÇÃO DE NOME / SOBRENOME DUPLICADO NO FIRESTORE
+        const nomeFormatado = nome.toLowerCase().replace(/\s+/g, ' ');
+        const checkUsuarios = await firestore.collection("users").get();
+        let nomeDuplicado = false;
+
+        checkUsuarios.forEach(doc => {
+          const dadosUser = doc.data();
+          const nomeCadastrado = (dadosUser.name || "").toLowerCase().replace(/\s+/g, ' ');
+          if (nomeCadastrado === nomeFormatado) {
+            nomeDuplicado = true;
+          }
+        });
+
+        if (nomeDuplicado) {
+          if (window.esconderLoader) window.esconderLoader();
+          return mostrarErro("⚠️ Já existe uma conta registada com este exato nome e sobrenome.");
+        }
+
         // Verifica se o login já existe
-        const check = await firestore.collection("users").where("login", "==", login).get();
-        if (!check.empty) {
+        const checkLogin = await firestore.collection("users").where("login", "==", login).get();
+        if (!checkLogin.empty) {
+          if (window.esconderLoader) window.esconderLoader();
           return mostrarErro("Esse login já existe. Escolha outro.");
         }
 
@@ -314,13 +371,41 @@ document.addEventListener("DOMContentLoaded", () => {
           createdAt: new Date().toISOString()
         });
 
+        // Regista o timestamp atual no localStorage para ativar o bloqueio de 24h no dispositivo
+        localStorage.setItem(CHAVE_DEVICE_REGISTRO, Date.now().toString());
+
         alert("Cadastro efetuado com sucesso! Faça login com as suas credenciais.");
-        window.location.hash = "#entrar";
+        mudarTelaAuth("entrar");
         registroForm.reset();
       } catch (err) {
         console.error("Erro no cadastro:", err);
         mostrarErro("Não foi possível cadastrar. Verifique a conexão com o banco de dados.");
+      } finally {
+        if (window.esconderLoader) window.esconderLoader();
       }
     };
   }
 });
+
+// --- CARREGADOR GLOBAL PARA TODAS AS TELAS (Instância Única) ---
+if (!document.getElementById('global-loader')) {
+  const loaderDiv = document.createElement('div');
+  loaderDiv.id = 'global-loader';
+  loaderDiv.innerHTML = `
+    <div class="spinner-ring"></div>
+    <span id="loader-text">A carregar...</span>
+  `;
+  document.body.appendChild(loaderDiv);
+}
+
+window.mostrarLoader = function(mensagem = "A carregar...") {
+  const textEl = document.getElementById('loader-text');
+  if (textEl) textEl.textContent = mensagem;
+  const loader = document.getElementById('global-loader');
+  if (loader) loader.classList.add('active');
+};
+
+window.esconderLoader = function() {
+  const loader = document.getElementById('global-loader');
+  if (loader) loader.classList.remove('active');
+};

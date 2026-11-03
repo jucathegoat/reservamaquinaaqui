@@ -6,6 +6,8 @@ let calMonth = new Date().getMonth();
 let turnoVisualizacaoAtivo = null; // Usado para quem tem perfil 'ambos' ou 'admin'
 
 export function calendario() {
+  if (window.mostrarLoader) window.mostrarLoader("A carregar calendário...");
+
   const turnoUser = user.turno || "manhã";
   const isAdminOrAmbos = user.role === "admin" || turnoUser === "ambos";
   
@@ -59,6 +61,10 @@ export function calendario() {
     </div>`;
 
   renderMonthGrid();
+
+  if (window.esconderLoader) {
+    setTimeout(() => window.esconderLoader(), 150);
+  }
 }
 
 window.mudarTurnoVisualizacao = function(novoTurno) {
@@ -210,5 +216,17 @@ window.clickCalDay = function(dateStr, turnoAlvo) {
     window.modalReservaTurno(dateStr, turnoAlvo);
   } else if (window.modalReserva) {
     window.modalReserva(dateStr);
+  }
+}
+
+export async function carregarDadosDoMes() {
+  if (window.mostrarLoader) window.mostrarLoader("A sincronizar reservas...");
+  
+  try {
+    // Lógica assíncrona se necessário
+  } catch (error) {
+    console.error(error);
+  } finally {
+    if (window.esconderLoader) window.esconderLoader();
   }
 }

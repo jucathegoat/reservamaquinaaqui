@@ -67,3 +67,28 @@ export const FINALIDADES = [
 ];
 
 export const FERIADOS_FIXOS = ["01-01", "04-21", "05-01", "09-07", "10-12", "11-02", "11-15", "11-20", "12-25"];
+
+// ---------- Função Utilitária para Obter a Aula Atual ----------
+export function obterIndiceAulaAtual(turno = "manhã") {
+  const agora = new Date();
+  const minutosTotaisAgora = agora.getHours() * 60 + agora.getMinutes();
+
+  const tabela = turno.toLowerCase() === "tarde" ? TABELAS_HORARIOS_TARDE : TABELAS_HORARIOS_MANHA;
+
+  for (let i = 0; i < tabela.length; i++) {
+    const aula = tabela[i];
+    const [hInicio, mInicio] = aula.start.split(":").map(Number);
+    const [hFim, mFim] = aula.end.split(":").map(Number);
+
+    const minutosInicio = hInicio * 60 + mInicio;
+    const minutosFim = hFim * 60 + mFim;
+
+    if (minutosTotaisAgora >= minutosInicio && minutosTotaisAgora <= minutosFim) {
+      return aula.index;
+    }
+  }
+
+  return 0;
+}
+
+window.obterIndiceAulaAtual = obterIndiceAulaAtual;

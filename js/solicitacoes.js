@@ -8,7 +8,6 @@ if (!window.fecharModalSeguro) {
     if (wrap) wrap.remove();
   };
 
-  // Fechamento automático com a tecla ESC
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") window.fecharModalSeguro();
   });
@@ -28,7 +27,6 @@ if (!window.modal) {
       </div>
     `;
 
-    // Fecha ao clicar fora da caixa do modal
     wrap.addEventListener("click", (e) => {
       if (e.target === wrap) window.fecharModalSeguro();
     });
@@ -56,81 +54,92 @@ if (!window.nowFormatted) {
 }
 
 export function solicitacoes() {
-  const listaProfessores = (window.db?.users || []).filter(u => u.role === "professor" || u.role === "admin");
-  const turnoUser = user?.turno || "manhã";
-  const isAdminOrAmbos = user?.role === "admin" || turnoUser === "ambos";
+  if (window.mostrarLoader) window.mostrarLoader("A carregar solicitações...");
 
-  document.getElementById("main").innerHTML = `
-    <div class="head" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
-      <div>
-        <h2 style="font-size:22px; font-weight:800;">Solicitações e Reservas ${isAdminOrAmbos ? '' : `(${turnoUser.toUpperCase()})`}</h2>
-        <div class="muted" style="font-size:13px; color:var(--text-muted);">Gerenciamento unificado de solicitações</div>
+  try {
+    const listaProfessores = (window.db?.users || []).filter(u => u.role === "professor" || u.role === "admin");
+    const turnoUser = user?.turno || "manhã";
+    const isAdminOrAmbos = user?.role === "admin" || turnoUser === "ambos";
+
+    document.getElementById("main").innerHTML = `
+      <div class="head" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+        <div>
+          <h2 style="font-size:22px; font-weight:800;">Solicitações e Reservas ${isAdminOrAmbos ? '' : `(${turnoUser.toUpperCase()})`}</h2>
+          <div class="muted" style="font-size:13px; color:var(--text-muted);">Gerenciamento unificado de solicitações</div>
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+          <button class="btn-secondary" id="btnFiltrarHoje" style="border-radius:20px; padding:6px 14px; font-size:13px;">📅 Hoje</button>
+          <button class="btn-secondary" id="btnFiltrarAulaAtual" style="border-radius:20px; padding:6px 14px; font-size:13px;">⏰ Aula Atual</button>
+          <button class="btn-secondary" onclick="window.exportarRelatorioCSV()" style="border-radius:20px; padding:6px 16px; font-size:13px; background:#fff; color:#000; font-weight:bold;">📊 Relatório (.CSV)</button>
+          <button class="btn-primary" onclick="window.modalReserva()" style="border-radius:20px; padding:6px 18px; font-size:13px; font-weight:bold;">+ Nova Solicitação</button>
+        </div>
       </div>
-      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-        <button class="btn-secondary" id="btnFiltrarHoje" style="border-radius:20px; padding:6px 14px; font-size:13px;">📅 Hoje</button>
-        <button class="btn-secondary" id="btnFiltrarAulaAtual" style="border-radius:20px; padding:6px 14px; font-size:13px;">⏰ Aula Atual</button>
-        <button class="btn-secondary" onclick="window.exportarRelatorioCSV()" style="border-radius:20px; padding:6px 16px; font-size:13px; background:#fff; color:#000; font-weight:bold;">📊 Relatório (.CSV)</button>
-        <button class="btn-primary" onclick="window.modalReserva()" style="border-radius:20px; padding:6px 18px; font-size:13px; font-weight:bold;">+ Nova Solicitação</button>
+
+      <!-- BARRA DE AÇÕES EM LOTE -->
+      <div id="barraAcoesEmLote" class="card hidden" style="background:rgba(59,130,246,0.15); border-color:rgba(59,130,246,0.4); display:flex; justify-content:space-between; align-items:center; padding:10px 16px; margin-bottom:12px; border-radius:12px;">
+        <span id="txtItensSelecionados" style="font-size:13px; font-weight:bold;">0 itens selecionados</span>
+        <div style="display:flex; gap:6px;">
+          <button class="btn-sm" onclick="window.executarAcaoEmLote('devolver')" style="border-radius:16px;">↩️ Devolver Selecionados</button>
+          <button class="btn-sm danger" onclick="window.executarAcaoEmLote('excluir')" style="border-radius:16px;">🗑️ Excluir Selecionados</button>
+        </div>
       </div>
-    </div>
 
-    <!-- BARRA DE AÇÕES EM LOTE -->
-    <div id="barraAcoesEmLote" class="card hidden" style="background:rgba(59,130,246,0.15); border-color:rgba(59,130,246,0.4); display:flex; justify-content:space-between; align-items:center; padding:10px 16px; margin-bottom:12px; border-radius:12px;">
-      <span id="txtItensSelecionados" style="font-size:13px; font-weight:bold;">0 itens selecionados</span>
-      <div style="display:flex; gap:6px;">
-        <button class="btn-sm" onclick="window.executarAcaoEmLote('devolver')" style="border-radius:16px;">↩️ Devolver Selecionados</button>
-        <button class="btn-sm danger" onclick="window.executarAcaoEmLote('excluir')" style="border-radius:16px;">🗑️ Excluir Selecionados</button>
+      <!-- FILTROS SUPERIORES -->
+      <div class="card" style="margin-bottom:16px; padding:14px; border-radius:12px; background:rgba(15,23,42,0.6); border:1px solid var(--border);">
+        <div class="filter-grid" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:10px;">
+          <input id="searchSol" placeholder="🔍 Buscar ID, nome, máquina..." class="inp" style="border-radius:8px;">
+          <select id="filterProf" class="inp" style="border-radius:8px;">
+            <option value="todos">Todos os Professores</option>
+            ${listaProfessores.map(p => `<option value="${window.esc(p.name)}">${window.esc(p.name)}</option>`).join("")}
+          </select>
+          <input id="filterData" type="date" class="inp" style="border-radius:8px;">
+          <select id="filterStatus" class="inp" style="border-radius:8px;">
+            <option value="todos">Todos os Status</option>
+            <option value="aguardando">Aguardando Entrega</option>
+            <option value="retirado">Em Uso (Retirado)</option>
+            <option value="devolvido">Devolvido</option>
+          </select>
+        </div>
       </div>
-    </div>
 
-    <!-- FILTROS SUPERIORES -->
-    <div class="card" style="margin-bottom:16px; padding:14px; border-radius:12px; background:rgba(15,23,42,0.6); border:1px solid var(--border);">
-      <div class="filter-grid" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:10px;">
-        <input id="searchSol" placeholder="🔍 Buscar ID, nome, máquina..." class="inp" style="border-radius:8px;">
-        <select id="filterProf" class="inp" style="border-radius:8px;">
-          <option value="todos">Todos os Professores</option>
-          ${listaProfessores.map(p => `<option value="${window.esc(p.name)}">${window.esc(p.name)}</option>`).join("")}
-        </select>
-        <input id="filterData" type="date" class="inp" style="border-radius:8px;">
-        <select id="filterStatus" class="inp" style="border-radius:8px;">
-          <option value="todos">Todos os Status</option>
-          <option value="aguardando">Aguardando Entrega</option>
-          <option value="retirado">Em Uso (Retirado)</option>
-          <option value="devolvido">Devolvido</option>
-        </select>
+      <!-- CONTAINER DE CARDS SOLTOS -->
+      <div id="solicitacoesContainer" style="display:flex; flex-direction:column; gap:12px;">
+        ${renderizarCardsSolicitacoes()}
       </div>
-    </div>
+    `;
 
-    <!-- CONTAINER DE CARDS SOLTOS -->
-    <div id="solicitacoesContainer" style="display:flex; flex-direction:column; gap:12px;">
-      ${renderizarCardsSolicitacoes()}
-    </div>
-  `;
+    const trigger = (aulaFiltro = null) => {
+      const q = document.getElementById("searchSol")?.value.trim().toLowerCase() || "";
+      const p = document.getElementById("filterProf")?.value || "todos";
+      const d = document.getElementById("filterData")?.value || "";
+      const s = document.getElementById("filterStatus")?.value || "todos";
+      
+      const container = document.getElementById("solicitacoesContainer");
+      if (container) container.innerHTML = renderizarCardsSolicitacoes(q, p, d, s, aulaFiltro);
+    };
 
-  const trigger = (aulaFiltro = null) => {
-    const q = document.getElementById("searchSol")?.value.trim().toLowerCase() || "";
-    const p = document.getElementById("filterProf")?.value || "todos";
-    const d = document.getElementById("filterData")?.value || "";
-    const s = document.getElementById("filterStatus")?.value || "todos";
-    
-    const container = document.getElementById("solicitacoesContainer");
-    if (container) container.innerHTML = renderizarCardsSolicitacoes(q, p, d, s, aulaFiltro);
-  };
+    document.getElementById("searchSol")?.addEventListener("input", () => trigger());
+    document.getElementById("filterProf")?.addEventListener("change", () => trigger());
+    document.getElementById("filterData")?.addEventListener("change", () => trigger());
+    document.getElementById("filterStatus")?.addEventListener("change", () => trigger());
 
-  document.getElementById("searchSol")?.addEventListener("input", () => trigger());
-  document.getElementById("filterProf")?.addEventListener("change", () => trigger());
-  document.getElementById("filterData")?.addEventListener("change", () => trigger());
-  document.getElementById("filterStatus")?.addEventListener("change", () => trigger());
+    document.getElementById("btnFiltrarHoje").onclick = () => {
+      document.getElementById("filterData").value = new Date().toISOString().split("T")[0];
+      trigger();
+    };
 
-  document.getElementById("btnFiltrarHoje").onclick = () => {
-    document.getElementById("filterData").value = new Date().toISOString().split("T")[0];
-    trigger();
-  };
-
-  document.getElementById("btnFiltrarAulaAtual").onclick = () => {
-    document.getElementById("filterData").value = new Date().toISOString().split("T")[0];
-    trigger(window.obterIndiceAulaAtual ? window.obterIndiceAulaAtual() : 0);
-  };
+    document.getElementById("btnFiltrarAulaAtual").onclick = () => {
+      document.getElementById("filterData").value = new Date().toISOString().split("T")[0];
+      // Usa a função robusta do config.js com o turno adequado
+      const turnoAtual = turnoUser === "ambos" ? "manhã" : turnoUser;
+      const aulaAtualIdx = window.obterIndiceAulaAtual ? window.obterIndiceAulaAtual(turnoAtual) : 0;
+      trigger(aulaAtualIdx);
+    };
+  } finally {
+    if (window.esconderLoader) {
+      setTimeout(() => window.esconderLoader(), 150);
+    }
+  }
 }
 
 function renderizarCardsSolicitacoes(query = "", filterProf = "todos", filterData = "", filterStatus = "todos", filterAulaIdx = null) {
@@ -178,8 +187,11 @@ function renderizarCardsSolicitacoes(query = "", filterProf = "todos", filterDat
     if (x.lessons && Array.isArray(x.lessons)) x.lessons.forEach(l => groups[bid].lessons.add(l));
     else if (x.lesson) groups[bid].lessons.add(x.lesson);
 
-    if (x.lessonIndexes && Array.isArray(x.lessonIndexes)) x.lessonIndexes.forEach(idx => groups[bid].lessonIndexes.add(idx));
-    else if (x.lessonIndex !== undefined) groups[bid].lessonIndexes.add(x.lessonIndex);
+    if (x.lessonIndexes && Array.isArray(x.lessonIndexes)) {
+      x.lessonIndexes.forEach(idx => groups[bid].lessonIndexes.add(Number(idx)));
+    } else if (x.lessonIndex !== undefined) {
+      groups[bid].lessonIndexes.add(Number(x.lessonIndex));
+    }
 
     if (x.equipments && Array.isArray(x.equipments)) x.equipments.forEach(e => groups[bid].equipments.add(e));
     else if (x.equipment) groups[bid].equipments.add(x.equipment);
@@ -189,7 +201,12 @@ function renderizarCardsSolicitacoes(query = "", filterProf = "todos", filterDat
 
   if (filterProf !== "todos") list = list.filter(g => g.userName === filterProf);
   if (filterData) list = list.filter(g => g.date === filterData);
-  if (filterAulaIdx !== null) list = list.filter(g => g.lessonIndexes.has(filterAulaIdx));
+  
+  if (filterAulaIdx !== null && filterAulaIdx !== undefined) {
+    const idxNum = Number(filterAulaIdx);
+    list = list.filter(g => Array.from(g.lessonIndexes).some(i => Number(i) === idxNum));
+  }
+
   if (filterStatus !== "todos") list = list.filter(g => g.status === filterStatus);
 
   if (query) {
@@ -285,6 +302,8 @@ window.executarAcaoEmLote = async function(acao) {
   if (acao === "excluir" && !confirm(`Deseja realmente excluir ${selecionados.length} lote(s)?`)) return;
   if (acao === "devolver" && !confirm(`Deseja devolver os equipamentos de ${selecionados.length} lote(s)?`)) return;
 
+  if (window.mostrarLoader) window.mostrarLoader("A processar ação em lote...");
+
   try {
     for (let batchId of selecionados) {
       const itens = (window.db?.emprestimos || []).filter(x => (x.batchId || x.idDoc || x.id) === batchId);
@@ -320,6 +339,8 @@ window.executarAcaoEmLote = async function(acao) {
     window.nav("solicitacoes");
   } catch (err) {
     alert("Erro ao processar ação em lote: " + err.message);
+  } finally {
+    if (window.esconderLoader) window.esconderLoader();
   }
 };
 
@@ -457,6 +478,8 @@ window.modalReserva = function(defaultDate = "", turnoForcado = null) {
 
     if (!selectedLessons.length) return alert("Selecione pelo menos uma aula.");
 
+    if (window.mostrarLoader) window.mostrarLoader("A criar solicitação...");
+
     const batchId = window.uid();
     const horaCriacao = window.nowFormatted();
 
@@ -490,6 +513,8 @@ window.modalReserva = function(defaultDate = "", turnoForcado = null) {
       window.nav("solicitacoes");
     } catch (err) {
       alert("Erro ao criar solicitação: " + err.message);
+    } finally {
+      if (window.esconderLoader) window.esconderLoader();
     }
   };
 };
@@ -664,6 +689,8 @@ window.modalAtribuirPorAula = function(batchId) {
       }
     }
 
+    if (window.mostrarLoader) window.mostrarLoader("A salvar atribuições...");
+
     try {
       for (let target of itens) {
         await firestore.collection("emprestimos").doc(target.idDoc).delete();
@@ -701,6 +728,8 @@ window.modalAtribuirPorAula = function(batchId) {
       window.nav("solicitacoes");
     } catch (err) {
       alert("Erro ao salvar: " + err.message);
+    } finally {
+      if (window.esconderLoader) window.esconderLoader();
     }
   };
 };
@@ -747,6 +776,8 @@ window.modalEditarReserva = function(batchId) {
     const novaData = document.getElementById("eDate").value;
     const novaQtd = parseInt(document.getElementById("eQty").value, 10);
 
+    if (window.mostrarLoader) window.mostrarLoader("A atualizar solicitação...");
+
     try {
       for (let target of itens) {
         await firestore.collection("emprestimos").doc(target.idDoc).update({
@@ -760,6 +791,8 @@ window.modalEditarReserva = function(batchId) {
       window.nav("solicitacoes");
     } catch (err) {
       alert("Erro ao atualizar: " + err.message);
+    } finally {
+      if (window.esconderLoader) window.esconderLoader();
     }
   };
 };
@@ -770,6 +803,8 @@ window.devolverLoteComRegistro = async function(batchId) {
   const itens = (window.db?.emprestimos || []).filter(x => (x.batchId || x.idDoc || x.id) === batchId);
   if (!itens.length) return;
   const dataDevolucao = window.nowFormatted();
+
+  if (window.mostrarLoader) window.mostrarLoader("A registar devolução...");
 
   try {
     for (let target of itens) {
@@ -796,11 +831,14 @@ window.devolverLoteComRegistro = async function(batchId) {
     window.nav("solicitacoes");
   } catch (err) {
     alert("Erro ao devolver: " + err.message);
+  } finally {
+    if (window.esconderLoader) window.esconderLoader();
   }
 };
 
 window.cancelarLote = async function(batchId) {
   if (confirm("Deseja realmente excluir esta solicitação?")) {
+    if (window.mostrarLoader) window.mostrarLoader("A excluir solicitação...");
     try {
       const itens = (window.db?.emprestimos || []).filter(x => (x.batchId || x.idDoc || x.id) === batchId);
       for (let d of itens) {
@@ -810,6 +848,8 @@ window.cancelarLote = async function(batchId) {
       window.nav("solicitacoes");
     } catch (err) {
       alert("Erro ao excluir: " + err.message);
+    } finally {
+      if (window.esconderLoader) window.esconderLoader();
     }
   }
 };
