@@ -1,15 +1,4 @@
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.getRegistrations().then(registrations => {
-    for (let registration of registrations) registration.unregister();
-  });
-}
-if ('caches' in window) {
-  caches.keys().then(names => {
-    for (let name of names) caches.delete(name);
-  });
-}
-
-const firebaseConfig = {
+export const firebaseConfig = {
   apiKey: "AIzaSyCaz1JCXX1RLOZviyG3Ggf47B0blheSa68",
   authDomain: "reserva-escolamariaolimpia.firebaseapp.com",
   projectId: "reserva-escolamariaolimpia",
@@ -22,8 +11,8 @@ if (!firebase.apps.length) {
   firebase.initializeApp(firebaseConfig);
 }
 const firestore = firebase.firestore();
-const SESSION_KEY = "controle_sessao_proati_v44";
-const USER_CACHE_KEY = "controle_user_data_v35";
+
+const SESSION_KEY = "controle_sessao_proati_v53";
 
 const MODELOS_EQUIPAMENTO = [
   { id: "M", label: "M (Multilaser)" },
@@ -69,11 +58,10 @@ const TABELAS_HORARIOS = {
 
 const FINALIDADES = [
   { id: "redacao", label: "Redação" },
-  { id: "programacao", label: "Programação" },
+  { id: "programacao", label: "Alura" },
   { id: "speak", label: "Speak (Inglês)" },
   { id: "matific", label: "Matific (Matemática)" },
   { id: "sem_plataforma", label: "Sem Plataforma" },
-  { id: "outros", label: "Outros" }
 ];
 
 const FERIADOS_FIXOS = ["01-01", "04-21", "05-01", "09-07", "10-12", "11-02", "11-15", "11-20", "12-25"];
@@ -95,6 +83,7 @@ const menus = [
   ["ocupacao", "📊 Ocupação %"],
   ["calendario", "Calendário"],
   ["solicitacoes", "Solicitações & Reservas"],
+  ["inspetoras", "💻 Controle de Saídas"],
   ["devolucoes", "Histórico Devoluções"],
   ["avarias", "Avarias"],
   ["bloqueios", "Bloqueios"],
@@ -225,17 +214,22 @@ function verificarSessaoSalva() {
   if (cachedUserData) {
     try {
       const u = JSON.parse(cachedUserData);
-      if (u && u.name) {
-        iniciarSessao(u);
+      if (u && (u.name || u.idDoc || u.id)) {
+        user = u;
+        $("login").classList.add("hidden");
+        $("app").classList.remove("hidden");
+
+        $("who").innerHTML = `
+          <span><b>${esc(u.name)}</b> (${u.role === "admin" ? "Admin" : "Prof."})</span>
+          <button class="btn-sm" onclick="modalEditarMeuPerfil()">✏️ Perfil</button>
+          <button class="btn-sm danger" id="btnLogoutApp">🚪 Sair</button>
+        `;
+
+        $("btnLogoutApp").onclick = encerrarSessao;
+        nav("dashboard");
         return;
       }
     } catch (e) {}
-  }
-  const savedDocId = localStorage.getItem(SESSION_KEY);
-  if (savedDocId && !cachedUserData) {
-    firestore.collection("users").doc(savedDocId).get().then(doc => {
-      if (doc.exists) iniciarSessao({ idDoc: doc.id, ...doc.data() });
-    }).catch(() => {});
   }
 }
 
@@ -248,8 +242,7 @@ if (document.readyState === "loading") {
 function iniciarSessao(u) {
   user = u;
   localStorage.setItem(SESSION_KEY, JSON.stringify(u));
-  if (u.idDoc) localStorage.setItem(USER_CACHE_KEY, JSON.stringify(u));
-
+  
   $("login").classList.add("hidden");
   $("app").classList.remove("hidden");
 
@@ -266,7 +259,6 @@ function iniciarSessao(u) {
 function encerrarSessao() {
   user = null;
   localStorage.removeItem(SESSION_KEY);
-  localStorage.removeItem(USER_CACHE_KEY);
   $("app").classList.add("hidden");
   $("login").classList.remove("hidden");
 }
@@ -375,7 +367,7 @@ function modalEditarMeuPerfil() {
       <label class="lbl" style="margin-top:10px;">Senha (4 números)
         <div style="display:flex; gap:6px;">
           <input id="mpPass" type="password" maxlength="4" pattern="\\d{4}" class="inp" value="${esc(currentUser.pass)}" required>
-          <button type="button" id="btnTogglePass" class="btn-secondary">👁️️ Ver</button>
+          <button type="button" id="btnTogglePass" class="btn-secondary">👁️ Ver</button>
         </div>
       </label>
 
@@ -417,7 +409,6 @@ function modalEditarMeuPerfil() {
       user.userLogin = l;
       user.pass = p;
       localStorage.setItem(SESSION_KEY, JSON.stringify(user));
-      localStorage.setItem(USER_CACHE_KEY, JSON.stringify(user));
 
       alert("Perfil atualizado com sucesso!");
       m.remove();
@@ -820,7 +811,7 @@ function renderizarTabelaSolicitacoes(query = "", filterProf = "todos", filterDa
         date: x.date || "",
         tipoEquipamento: x.tipoEquipamento || "notebook",
         purpose: x.purpose || "outros",
-        lessons: new Set(),
+        lessons: [],
         lessonIndexes: new Set(),
         equipments: new Set(),
         status: x.status || "aguardando",
@@ -833,8 +824,13 @@ function renderizarTabelaSolicitacoes(query = "", filterProf = "todos", filterDa
       groups[bid].qtdTotalPedida = qtdNoDoc;
     }
 
-    if (x.lessons && Array.isArray(x.lessons)) x.lessons.forEach(l => groups[bid].lessons.add(l));
-    else if (x.lesson) groups[bid].lessons.add(x.lesson);
+    if (x.lessons && Array.isArray(x.lessons)) {
+      x.lessons.forEach(l => {
+        if (!groups[bid].lessons.includes(l)) groups[bid].lessons.push(l);
+      });
+    } else if (x.lesson && !groups[bid].lessons.includes(x.lesson)) {
+      groups[bid].lessons.push(x.lesson);
+    }
 
     if (x.lessonIndexes && Array.isArray(x.lessonIndexes)) x.lessonIndexes.forEach(idx => groups[bid].lessonIndexes.add(idx));
     else if (x.lessonIndex !== undefined) groups[bid].lessonIndexes.add(x.lessonIndex);
@@ -897,7 +893,7 @@ function renderizarTabelaSolicitacoes(query = "", filterProf = "todos", filterDa
                 <td><b>${esc(g.userName)}</b></td>
                 <td><span class="badge" style="background:rgba(59,130,246,0.1); color:#38bdf8;">${tipoBadge}</span></td>
                 <td>${g.date ? g.date.split('-').reverse().join('/') : "—"}</td>
-                <td><small>${Array.from(g.lessons).join(", ")}</small></td>
+                <td><small>${g.lessons.join(", ")}</small></td>
                 <td>
                   <b>${qtdAtribuida} / ${qtdTotal} máq.</b>
                   ${qtdAtribuida < qtdTotal ? `<small style="color:#f59e0b; display:block;">(Pendente)</small>` : ''}
@@ -905,7 +901,7 @@ function renderizarTabelaSolicitacoes(query = "", filterProf = "todos", filterDa
                 <td>${stBadge}</td>
                 <td>
                   <div style="display:flex; gap:4px; flex-wrap:wrap;">
-                    ${podeEditar ? `<button class="btn-sm" onclick="modalAtribuirPorAula('${g.batchId}')">📌 Atribuição por Aula</button>` : ''}
+                    ${podeEditar ? `<button class="btn-sm" style="background:var(--primary); color:#fff; font-weight:bold;" onclick="modalAtribuirPorAula('${g.batchId}')">💻 Atribuir Máquinas</button>` : ''}
                     ${podeEditar ? `<button class="btn-sm" onclick="modalEditarReserva('${g.batchId}')">✏️ Editar</button>` : ''}
                     ${podeEditar && !isDevolvido ? `<button class="btn-sm danger" onclick="devolverLoteComRegistro('${g.batchId}')">↩️ Devolver</button>` : ''}
                     ${podeEditar ? `<button class="btn-sm danger" onclick="cancelarLote('${g.batchId}')">🗑️ Excluir</button>` : ''}
@@ -931,7 +927,7 @@ function exportarRelatorioCSV() {
         userName: x.userName || "Não identificado",
         tipoEquipamento: x.tipoEquipamento || "notebook",
         date: x.date || "",
-        lessons: new Set(),
+        lessons: [],
         equipments: new Set(),
         status: x.status || "aguardando",
         qtdTotalPedida: 0
@@ -943,8 +939,13 @@ function exportarRelatorioCSV() {
       groups[bid].qtdTotalPedida = qtdNoDoc;
     }
 
-    if (x.lessons && Array.isArray(x.lessons)) x.lessons.forEach(l => groups[bid].lessons.add(l));
-    else if (x.lesson) groups[bid].lessons.add(x.lesson);
+    if (x.lessons && Array.isArray(x.lessons)) {
+      x.lessons.forEach(l => {
+        if (!groups[bid].lessons.includes(l)) groups[bid].lessons.push(l);
+      });
+    } else if (x.lesson && !groups[bid].lessons.includes(x.lesson)) {
+      groups[bid].lessons.push(x.lesson);
+    }
 
     if (x.equipments && Array.isArray(x.equipments)) x.equipments.forEach(e => groups[bid].equipments.add(e));
     else if (x.equipment) groups[bid].equipments.add(x.equipment);
@@ -958,7 +959,7 @@ function exportarRelatorioCSV() {
     const prof = `"${(g.userName || "").replace(/"/g, '""')}"`;
     const tipo = g.tipoEquipamento === "tablet" ? "Tablet" : "Notebook";
     const data = g.date ? g.date.split('-').reverse().join('/') : "—";
-    const horarios = `"${Array.from(g.lessons).join(", ").replace(/"/g, '""')}"`;
+    const horarios = `"${g.lessons.join(", ").replace(/"/g, '""')}"`;
     const qtdPedida = g.qtdTotalPedida || 1;
     const qtdAtribuida = listaOrdenada.length;
     const equipamentos = `"${listaOrdenada.join(", ").replace(/"/g, '""')}"`;
@@ -976,7 +977,7 @@ function exportarRelatorioCSV() {
   document.body.removeChild(link);
 }
 
-/* MODAL DE ATRIBUIÇÃO POR AULA COM TRAVA RIGOROSA CONTRA BLOQUEIOS */
+/* MODAL DE ATRIBUIÇÃO POR AULA COM SELEÇÃO DE AULA LIMPA E ORGANIZADA */
 function modalAtribuirPorAula(batchId) {
   const itens = db.emprestimos.filter(x => (x.batchId || x.idDoc || x.id) === batchId);
   if (!itens.length) return alert("Solicitação não encontrada.");
@@ -988,18 +989,27 @@ function modalAtribuirPorAula(batchId) {
     return alert(`🚫 ERRO CRÍTICO: Esta data (${itemPrincipal.date.split('-').reverse().join('/')}) possui BLOQUEIO TOTAL e não pode receber atribuições.`);
   }
 
-  let aulasSelecionadas = itemPrincipal.lessonIndexes || [];
-  if (!aulasSelecionadas.length && itemPrincipal.lessonIndex !== undefined) {
-    aulasSelecionadas = [itemPrincipal.lessonIndex];
-  }
+  // Coleta limpa e única dos índices de aulas (evita duplicações)
+  let aulasSet = new Set();
+  itens.forEach(x => {
+    if (x.lessonIndexes && Array.isArray(x.lessonIndexes)) {
+      x.lessonIndexes.forEach(idx => aulasSet.add(idx));
+    } else if (x.lessonIndex !== undefined) {
+      aulasSet.add(x.lessonIndex);
+    }
+  });
+  let aulasSelecionadas = Array.from(aulasSet).sort((a, b) => a - b);
   if (!aulasSelecionadas.length) aulasSelecionadas = [0];
 
   const tabelaUsada = TABELAS_HORARIOS[itemPrincipal.segment || "6_7"] || TABELAS_HORARIOS["6_7"];
   let aulaAtivaIdx = aulasSelecionadas[0];
 
   let atribuicoesPorAula = {};
+  let historicoUndoPorAula = {};
+
   aulasSelecionadas.forEach(idx => {
     atribuicoesPorAula[idx] = [];
+    historicoUndoPorAula[idx] = null;
   });
 
   itens.forEach(x => {
@@ -1015,7 +1025,6 @@ function modalAtribuirPorAula(batchId) {
   });
 
   let prefixoAtual = itemPrincipal.tipoEquipamento === "tablet" ? "TAB" : "M";
-  let qtdLimite = itemPrincipal.qtdTotalPedida || 1;
 
   const m = modal(`
     <div class="modal-top">
@@ -1023,9 +1032,14 @@ function modalAtribuirPorAula(batchId) {
       <button class="close">&times;</button>
     </div>
 
-    <div style="background:rgba(59, 130, 246, 0.1); border:1px solid rgba(59, 130, 246, 0.3); padding:10px 14px; border-radius:8px; display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+    <div style="background:rgba(59, 130, 246, 0.1); border:1px solid rgba(59, 130, 246, 0.3); padding:10px 14px; border-radius:8px; display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; flex-wrap:wrap; gap:8px;">
       <span style="font-size:13px;">Professor: <b>${esc(itemPrincipal.userName)}</b> (${itemPrincipal.tipoEquipamento === 'tablet' ? 'Tablet' : 'Notebook'})</span>
-      <span id="badgeContadorAulaAtrib" class="badge active" style="font-size:12px;">0 / ${qtdLimite} máq.</span>
+      <div style="display:flex; align-items:center; gap:12px;">
+        <span id="badgeContadorAulaAtrib" class="badge active" style="font-size:12px;">0 máquinas</span>
+        <label style="display:flex; align-items:center; gap:6px; font-size:12px; cursor:pointer; font-weight:bold; color:#f59e0b;">
+          <input type="checkbox" id="chkAtivarIlimitado" checked style="cursor:pointer; width:16px; height:16px;"> 🔓 Atribuir sem limite
+        </label>
+      </div>
     </div>
 
     <label class="lbl"><b>ESCOLHA A AULA PARA CONFIGURAR AS MÁQUINAS:</b></label>
@@ -1051,11 +1065,13 @@ function modalAtribuirPorAula(batchId) {
       `).join("")}
     </div>
 
-    <label class="lbl"><b>DIGITE O NÚMERO E APERTE VÍRGULA (,):</b></label>
-    <input id="inpAtribComandoAula" class="inp" placeholder="Ex: 1, 2, 3..." style="font-size:15px; padding:10px;" autofocus>
+    <div style="display:flex; gap:6px; margin-bottom:10px;">
+      <input id="inpAtribComandoAula" class="inp" placeholder="Ex: 1, 2, 3 (digite e aperte vírgula ou Enter)..." style="font-size:15px; padding:10px; flex:1;" autofocus>
+      <button type="button" id="btnUndoAula" class="btn-secondary" title="Desfazer última remoção (Ctrl+Z)">↩️ Desfazer</button>
+    </div>
 
     <div style="background:var(--bg-input); border:1px solid var(--border); padding:12px; border-radius:8px; margin-top:12px; margin-bottom:16px; min-height:55px;">
-      <label class="lbl" style="margin-bottom:6px; display:block;" id="labelAulaAtualContainer">Máquinas da Aula:</label>
+      <label class="lbl" style="margin-bottom:6px; display:block;" id="labelAulaAtualContainer">Máquinas da Aula Atual:</label>
       <div id="containerTagsAulaAtrib"></div>
     </div>
 
@@ -1065,6 +1081,7 @@ function modalAtribuirPorAula(batchId) {
   const inputEl = m.querySelector("#inpAtribComandoAula");
   const containerTags = m.querySelector("#containerTagsAulaAtrib");
   const badgeContador = m.querySelector("#badgeContadorAulaAtrib");
+  const btnUndo = m.querySelector("#btnUndoAula");
 
   const atualizarTelaAula = () => {
     const aulaBloqueadaAtual = bloqDia.some(b => String(b.lesson) === String(aulaAtivaIdx));
@@ -1077,7 +1094,7 @@ function modalAtribuirPorAula(batchId) {
     }
 
     const listaAtual = atribuicoesPorAula[aulaAtivaIdx] || [];
-    badgeContador.textContent = `${listaAtual.length} / ${qtdLimite} máq.`;
+    badgeContador.textContent = `${listaAtual.length} máquinas`;
 
     if (aulaBloqueadaAtual) {
       containerTags.innerHTML = `<span class="badge blocked" style="background:#ef4444; color:#fff; font-size:12px; padding:6px 10px;">🔒 Impossível atribuir: Esta aula possui um bloqueio ativo!</span>`;
@@ -1085,15 +1102,26 @@ function modalAtribuirPorAula(batchId) {
       containerTags.innerHTML = `<span class="muted" style="font-size:12px;">Nenhuma máquina atribuída para esta aula específica.</span>`;
     } else {
       containerTags.innerHTML = listaAtual.map(eq => `
-        <span class="badge active" style="font-size:12px; padding:4px 8px; display:inline-flex; align-items:center; gap:4px; margin:2px;">
-          ${eq} <b style="cursor:pointer; color:#fff;" onclick="window.removerTagAulaAtrib('${eq}')">&times;</b>
+        <span class="badge active" style="font-size:12px; padding:4px 8px; display:inline-flex; align-items:center; gap:6px; margin:2px;">
+          ${eq} 
+          <button type="button" class="btn-sm danger" style="padding:0px 4px; font-size:10px; line-height:1.2;" onclick="window.removerTagAulaAtrib('${eq}')" title="Apagar máquina">🗑️ Apagar</button>
         </span>
       `).join("");
     }
   };
 
   window.removerTagAulaAtrib = (eq) => {
-    atribuicoesPorAula[aulaAtivaIdx] = (atribuicoesPorAula[aulaAtivaIdx] || []).filter(x => x !== eq);
+    const lista = atribuicoesPorAula[aulaAtivaIdx] || [];
+    historicoUndoPorAula[aulaAtivaIdx] = { lista: [...lista], removido: eq };
+    atribuicoesPorAula[aulaAtivaIdx] = lista.filter(x => x !== eq);
+    atualizarTelaAula();
+  };
+
+  btnUndo.onclick = () => {
+    const undoData = historicoUndoPorAula[aulaAtivaIdx];
+    if (!undoData) return alert("Nada para desfazer nesta aula.");
+    atribuicoesPorAula[aulaAtivaIdx] = [...undoData.lista];
+    historicoUndoPorAula[aulaAtivaIdx] = null;
     atualizarTelaAula();
   };
 
@@ -1142,11 +1170,7 @@ function modalAtribuirPorAula(batchId) {
         let bruto = pedacos[i].trim().toUpperCase();
         if (bruto) {
           if (!atribuicoesPorAula[aulaAtivaIdx]) atribuicoesPorAula[aulaAtivaIdx] = [];
-          if (atribuicoesPorAula[aulaAtivaIdx].length >= qtdLimite) {
-            alert(`Limite de ${qtdLimite} máquinas atingido para esta aula!`);
-            break;
-          }
-
+          
           let codigoFinal = bruto;
           if (!/[A-Z]/.test(bruto)) codigoFinal = prefixoAtual + bruto;
 
@@ -1172,9 +1196,6 @@ function modalAtribuirPorAula(batchId) {
       let bruto = inputEl.value.trim().toUpperCase();
       if (bruto) {
         if (!atribuicoesPorAula[aulaAtivaIdx]) atribuicoesPorAula[aulaAtivaIdx] = [];
-        if (atribuicoesPorAula[aulaAtivaIdx].length >= qtdLimite) {
-          return alert(`Limite de ${qtdLimite} máquinas atingido para esta aula!`);
-        }
 
         let codigoFinal = bruto;
         if (!/[A-Z]/.test(bruto)) codigoFinal = prefixoAtual + bruto;
@@ -1211,6 +1232,11 @@ function modalAtribuirPorAula(batchId) {
       }
     }
 
+    const qtdTotalFinal = Math.max(
+      ...Object.values(atribuicoesPorAula).map(arr => arr.length),
+      itemPrincipal.qtdTotalPedida || 1
+    );
+
     try {
       for (let target of itens) {
         await firestore.collection("emprestimos").doc(target.idDoc).delete();
@@ -1230,19 +1256,19 @@ function modalAtribuirPorAula(batchId) {
           tipoEquipamento: itemPrincipal.tipoEquipamento || "notebook",
           date: itemPrincipal.date,
           lessons: [nomeAulaLabel],
-          lessonIndexes: [lIdx],
+          lessonIndexes: aulasSelecionadas,
           lessonIndex: lIdx,
           segment: itemPrincipal.segment || "6_7",
           equipments: listaEqsAula,
           equipment: listaEqsAula[0],
-          qtdTotalPedida: qtdLimite,
+          qtdTotalPedida: qtdTotalFinal,
           purpose: itemPrincipal.purpose || "outros",
           status: statusAula,
           createdAt: itemPrincipal.createdAt || nowFormatted()
         });
       }
 
-      alert("Atribuição por aula salva com sucesso!");
+      alert("Atribuições salvas com sucesso!");
       m.remove();
     } catch (err) {
       alert("Erro ao salvar: " + err.message);
@@ -1349,8 +1375,8 @@ function modalEditarReserva(batchId) {
         <input id="eDate" type="date" value="${itemPrincipal.date}" class="inp" required>
       </label>
 
-      <label class="lbl" style="margin-top:10px;">Quantidade Pedida (Máx. 30)
-        <input id="eQty" type="number" min="1" max="30" value="${qtdAtual}" class="inp" required>
+      <label class="lbl" style="margin-top:10px;">Quantidade Pedida
+        <input id="eQty" type="number" min="1" max="100" value="${qtdAtual}" class="inp" required>
       </label>
 
       <button type="submit" class="btn-primary" style="margin-top:16px; width:100%;">Salvar Alterações</button>
@@ -1363,10 +1389,6 @@ function modalEditarReserva(batchId) {
     const novoTipo = $("eTipo").value;
     const novaData = $("eDate").value;
     const novaQtd = parseInt($("eQty").value, 10);
-
-    if (novaQtd > 30 && user.role !== "admin") {
-      return alert("🚫 Limite excedido: Cada solicitação pode ter no máximo 30 máquinas.");
-    }
 
     try {
       for (let target of itens) {
@@ -1683,7 +1705,7 @@ function modalResumoProfessoresDia(dateStr) {
                   <b>${validEqs.length} /${qtdPedidaReal} máq.</b>
                 </td>
                 <td style="padding:12px 10px;">
-                  <button class="btn-sm" onclick="modalAtribuirPorAula('${lote.batchId}')">📌 Atribuir</button>
+                  <button class="btn-sm" style="background:var(--primary); color:#fff; font-weight:bold;" onclick="modalAtribuirPorAula('${lote.batchId}')">💻 Atribuir Máquinas</button>
                 </td>
               </tr>
             `;
@@ -1716,9 +1738,9 @@ function tutorial() {
 
     <div class="card" style="display:flex; flex-direction:column; gap:16px;">
       <div style="background:rgba(59, 130, 246, 0.08); padding:14px; border-radius:10px; border:1px solid rgba(59, 130, 246, 0.2);">
-        <h3 style="margin-bottom:6px; color:#38bdf8;">1. Limite por Solicitação</h3>
+        <h3 style="margin-bottom:6px; color:#38bdf8;">1. Atribuição sem Limite</h3>
         <p style="font-size:13px; color:var(--text-muted);">
-          Cada professor pode solicitar até 30 máquinas por lote/solicitação.
+          No modal de atribuição, utilize a caixa de seleção para liberar a quantidade de máquinas de forma livre.
         </p>
       </div>
     </div>`;
@@ -2096,7 +2118,37 @@ function delUser(idDoc) {
   if (confirm("Excluir usuário?")) firestore.collection("users").doc(idDoc).delete();
 }
 
-/* CRIAR NOVA SOLICITAÇÃO (ATÉ 30 MÁQUINAS POR LOTE) */
+function modalPWAInstalacao() {
+  const m = modal(`
+    <div class="modal-top">
+      <h2>📲 Como Criar Atalho na Tela Inicial</h2>
+      <button class="close">&times;</button>
+    </div>
+
+    <div style="display:flex; flex-direction:column; gap:14px; font-size:13px; max-height:380px; overflow-y:auto; padding-right:4px;">
+      <div style="background:rgba(255,255,255,0.03); padding:10px; border-radius:8px; border:1px solid var(--border);">
+        <b style="color:#38bdf8;">🤖 Android (Chrome)</b>
+        <p style="margin-top:4px; color:var(--text-muted);">1. Clique nos 3 pontinhos (⋮) no canto superior direito.<br>2. Toque em <b>"Adicionar à tela inicial"</b> ou <b>"Instalar aplicativo"</b>.</p>
+      </div>
+
+      <div style="background:rgba(255,255,255,0.03); padding:10px; border-radius:8px; border:1px solid var(--border);">
+        <b style="color:#f43f5e;">🍎 iPhone / iPad (Safari)</b>
+        <p style="margin-top:4px; color:var(--text-muted);">1. Toque no ícone de <b>Compartilhar</b> (quadrado com seta para cima na barra inferior).<br>2. Role para baixo e toque em <b>"Adicionar à Tela de Início"</b>.</p>
+      </div>
+
+      <div style="background:rgba(255,255,255,0.03); padding:10px; border-radius:8px; border:1px solid var(--border);">
+        <b style="color:#10b981;">💻 Computador / Chromebook (Chrome / Edge)</b>
+        <p style="margin-top:4px; color:var(--text-muted);">1. Clique no ícone de tela/instalação ao lado da barra de endereço URL.<br>2. Ou vá em Menu (⋮) &gt; <b>Mais ferramentas</b> &gt; <b>Criar atalho...</b></p>
+      </div>
+    </div>
+
+    <button class="btn-primary close-btn" style="margin-top:16px; width:100%;">Entendi</button>
+  `);
+
+  m.querySelectorAll(".close, .close-btn").forEach(b => b.onclick = () => m.remove());
+}
+
+/* CRIAR NOVA SOLICITAÇÃO */
 function modalReserva(defaultDate = "") {
   const hoje = defaultDate || new Date().toISOString().split("T")[0];
 
@@ -2122,8 +2174,8 @@ function modalReserva(defaultDate = "") {
             <option value="8_9">8º e 9º Anos</option>
           </select>
         </label>
-        <label class="lbl">Quantidade de Máquinas (Máx. 30)
-          <input id="rsQty" type="number" min="1" max="30" value="1" class="inp" required>
+        <label class="lbl">Quantidade de Máquinas
+          <input id="rsQty" type="number" min="1" max="100" value="1" class="inp" required>
         </label>
         <label class="lbl">Atividade
           <select id="rsPurpose" class="inp">
@@ -2176,10 +2228,6 @@ function modalReserva(defaultDate = "") {
     const purp = $("rsPurpose").value;
     const selectedLessons = Array.from(m.querySelectorAll('input[name="solLesson"]:checked')).map(cb => parseInt(cb.value, 10));
 
-    if (qty > 30 && user.role !== "admin") {
-      return alert("🚫 Limite excedido: Cada solicitação pode ter no máximo 30 máquinas.");
-    }
-
     const bloqDia = db.bloqueios.filter(b => b.date === d);
     
     if (bloqDia.some(b => b.lesson === "all") && user.role !== "admin") {
@@ -2214,7 +2262,7 @@ function modalReserva(defaultDate = "") {
           tipoEquipamento: tipoEq,
           date: d,
           lessons: [nomeAula],
-          lessonIndexes: [lIdx],
+          lessonIndexes: selectedLessons,
           lessonIndex: lIdx,
           segment: seg,
           equipments: ["Pendente"],

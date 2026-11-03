@@ -1,66 +1,282 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="pt">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>reservamaquinaaqui</title>
-  <link rel="stylesheet" href="style.css">
-  
+  <title>reservamaquinaaqui - Escola Maria Olímpia</title>
+  <link rel="stylesheet" href="css/style.css">
   <!-- Firebase SDKs -->
   <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+  <style>
+    /* Fundo escuro limpo */
+    #bgCanvas {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
+      z-index: -1;
+      pointer-events: auto;
+      background: radial-gradient(circle at center, #0f172a 0%, #020617 100%);
+    }
+
+    /* Removemos o fundo quadrado e a borda da welcome-card, mantendo apenas o alinhamento */
+    .welcome-card {
+      background: transparent !important;
+      backdrop-filter: none !important;
+      -webkit-backdrop-filter: none !important;
+      border: none !important;
+      box-shadow: none !important;
+    }
+
+    /* Mantém o card de login/registro limpo e com bom contraste se necessário */
+    .form-container.card {
+      background: rgba(15, 23, 42, 0.85) !important;
+      backdrop-filter: blur(16px) !important;
+      -webkit-backdrop-filter: blur(16px) !important;
+      border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    }
+  </style>
 </head>
 <body>
 
-  <!-- TELA DE LOGIN -->
-  <div id="login">
-    <div class="login-card">
-      <div class="login-header">
-        <span class="icon-laptop">💻</span>
-        <h2>reservamaquinaaqui</h2>
-        <p class="muted">Escola Maria Olímpia de Souza Queiroz Maciel</p>
-      </div>
+  <!-- Canvas da Animação Interativa de Partículas -->
+  <canvas id="bgCanvas"></canvas>
 
-      <form id="loginForm">
-        <div class="field-group">
-          <label class="lbl" for="loginUser">Usuário</label>
-          <input id="loginUser" class="inp" placeholder="Digite seu usuário" required autocomplete="username">
-        </div>
-
-        <div class="field-group">
-          <label class="lbl" for="loginPass">Senha</label>
-          <input id="loginPass" type="password" maxlength="4" pattern="\d{4}" class="inp" placeholder="4 dígitos" required autocomplete="current-password">
-        </div>
-
-        <div id="loginError" class="login-error-msg"></div>
-
-        <button type="submit" class="login-btn">Entrar no Sistema</button>
-      </form>
-
-      <div class="login-footer">
-        <button type="button" class="btn-first-access" onclick="modalPrimeiroAcesso()">
-          🆕 Primeiro Acesso? Cadastre-se aqui
-        </button>
-        <button type="button" class="btn-secondary" style="width:100%; font-size:12px; margin-top:8px;" onclick="modalPWAInstalacao()">
-          📲 Como Criar Atalho / Instalar App
-        </button>
-        <span class="muted-sm" style="margin-top:8px;">Sistema Sincronizado em Nuvem</span>
-      </div>
+  <!-- 1. TELA DE BOAS-VINDAS (LANDING PAGE) -->
+  <div id="welcomeScreen" class="auth-screen active">
+    <div class="brand-top">
+      <img src="img/brand-logo.png" alt="RESERVEMAQUINAAQUI" class="brand-top-img">
     </div>
+    
+    <div class="welcome-card">
+      <div class="welcome-title-container">
+        <img src="img/titulo-bemvindo.png" alt="SEJA BEM-VINDO!" class="welcome-title-img">
+      </div>
+
+      <div class="welcome-subtitle">
+        <span class="play-icon">▶</span>
+        <img src="img/subtitulo-entre.png" alt="Entre ou Cadastre-se agora!" class="welcome-subtitle-img">
+      </div>
+      
+      <div class="notebook-container">
+        <img src="img/notebook.png" alt="Notebook" class="notebook-img">
+      </div>
+      
+      <a href="#entrar" class="btn-white-pill" id="btnIrParaLogin" style="text-decoration:none; display:inline-block; text-align:center;">Acessar</a>
+    </div>
+
+    <footer class="footer-social">
+      <a href="https://www.linkedin.com/in/devjuca/" target="_blank" rel="noopener noreferrer" title="LinkedIn">
+        <img src="img/linkedin.png" alt="LinkedIn" class="social-icon">
+      </a>
+      <a href="https://github.com/jucathegoat" target="_blank" rel="noopener noreferrer" title="GitHub">
+        <img src="img/github.png" alt="GitHub" class="social-icon">
+      </a>
+    </footer>
   </div>
 
-  <!-- APLICAÇÃO PRINCIPAL -->
-  <div id="app" class="hidden">
-    <header>
-      <h1>reservamaquinaaqui</h1>
+  <!-- 2. TELA DE LOGIN (usuário e senha apenas) -->
+  <div id="loginScreen" class="auth-screen">
+    <div class="brand-top">
+      <img src="img/brand-logo.png" alt="RESERVEMAQUINAAQUI" class="brand-top-img">
+    </div>
+    
+    <div class="form-container card">
+      <div class="form-header">
+        <span class="play-icon">▶</span>
+        <h2>LOGIN</h2>
+      </div>
+
+      <form id="loginForm" autocomplete="off">
+        <label class="lbl">Usuário / Nome
+          <input id="loginUser" class="inp" placeholder="Ex: seu.usuario" autocapitalize="none" autocorrect="off" spellcheck="false" required>
+        </label>
+        <label class="lbl" style="margin-top:12px;">Senha (4 números)
+          <input id="loginPass" type="password" maxlength="4" pattern="\d{4}" inputmode="numeric" class="inp" placeholder="••••" required>
+        </label>
+        <button type="submit" class="btn-primary" style="margin-top:20px; width:100%;">Entrar</button>
+      </form>
+
+      <button class="btn-secondary" style="margin-top:10px; width:100%;" id="btnIrParaPrimeiroAcesso">Primeiro Acesso / Cadastrar</button>
+      <button class="btn-text" style="margin-top:12px; width:100%; background:none; border:none; color:var(--text-muted); cursor:pointer;" id="btnVoltarWelcome">← Voltar ao Início</button>
+      
+      <div id="loginError" class="error-msg" hidden style="margin-top:10px; color:#ef4444; font-size:12px; text-align:center;"></div>
+    </div>
+
+    <footer class="footer-social">
+      <a href="https://www.linkedin.com/in/devjuca/" target="_blank"><img src="img/linkedin.png" alt="LinkedIn" class="social-icon"></a>
+      <a href="https://github.com/jucathegoat" target="_blank"><img src="img/github.png" alt="GitHub" class="social-icon"></a>
+    </footer>
+  </div>
+
+  <!-- 3. TELA DE REGISTRO / PRIMEIRO ACESSO -->
+  <div id="registerScreen" class="auth-screen">
+    <div class="brand-top">
+      <img src="img/brand-logo.png" alt="RESERVEMAQUINAAQUI" class="brand-top-img">
+    </div>
+    
+    <div class="form-container card">
+      <div class="form-header">
+        <span class="play-icon">▶</span>
+        <h2>REGISTRO</h2>
+      </div>
+
+      <form id="registerForm" autocomplete="off">
+        <label class="lbl">Nome Completo
+          <input id="paNome" class="inp" maxlength="80" placeholder="Ex: Maria Oliveira" required>
+        </label>
+        <label class="lbl" style="margin-top:10px;">Usuário de Acesso (Login - só letras, sem espaços)
+          <input id="paLogin" class="inp" maxlength="30" placeholder="Ex: maria.oliveira" autocapitalize="none" autocorrect="off" spellcheck="false" required>
+        </label>
+        <label class="lbl" style="margin-top:10px;">Senha (Exatamente 4 números)
+          <input id="paPass" type="password" maxlength="4" pattern="\d{4}" inputmode="numeric" class="inp" placeholder="Ex: 1234" required>
+        </label>
+        <label class="lbl" style="margin-top:10px;">Turno de Atuação
+          <select id="paTurno" class="inp">
+            <option value="manhã">Manhã</option>
+            <option value="tarde">Tarde</option>
+            <option value="ambos">Ambos (Manhã e Tarde)</option>
+          </select>
+        </label>
+
+        <div id="divSenhaAmbosContainerMobile" hidden style="display:none; margin-top:10px; background:rgba(234,179,8,0.08); padding:10px; border-radius:8px; border:1px solid rgba(234,179,8,0.3);">
+          <label class="lbl" style="color:#facc15;">
+            🔒 Senha de Autorização (Perfil Ambos)
+            <input id="paSenhaAmbos" type="password" class="inp" placeholder="Senha fornecida pelo ADM" style="margin-top:4px;">
+          </label>
+        </div>
+
+        <button type="submit" class="btn-primary" style="margin-top:16px; width:100%;">Concluir Cadastro</button>
+      </form>
+
+      <div id="registroError" class="error-msg" hidden style="margin-top:10px; color:#ef4444; font-size:12px; text-align:center;"></div>
+
+      <button class="btn-text" style="margin-top:12px; width:100%; background:none; border:none; color:var(--text-muted); cursor:pointer;" id="btnVoltarLogin">← Voltar ao Login</button>
+    </div>
+
+    <footer class="footer-social">
+      <a href="https://www.linkedin.com/in/devjuca/" target="_blank"><img src="img/linkedin.png" alt="LinkedIn" class="social-icon"></a>
+      <a href="https://github.com/jucathegoat" target="_blank"><img src="img/github.png" alt="GitHub" class="social-icon"></a>
+    </footer>
+  </div>
+
+  <!-- APLICAÇÃO PRINCIPAL (SEPARADA EM TOPO E NAVEGAÇÃO BOTTOM) -->
+  <div id="app" class="hidden" style="width:100%; min-height:100vh; display:flex; flex-direction:column;">
+    
+    <!-- 1. BARRA SUPERIOR FIXA (Perfil, Nome e Botões de Ação) -->
+    <header class="top-user-bar">
+      <div class="logo-top-sm">🏫 PROATI PEI Maria Olímpia</div>
       <div id="who"></div>
     </header>
 
-    <nav id="nav"></nav>
+    <!-- 2. CONTEÚDO PRINCIPAL DAS TELAS -->
+    <main id="main" class="main-content"></main>
 
-    <main id="main"></main>
+    <!-- 3. BARRA INFERIOR FIXA (Navegação Principal) -->
+    <nav class="bottom-nav-bar">
+      <div id="nav" class="nav-bar"></div>
+    </nav>
   </div>
 
-  <script src="app.js"></script>
+  <!-- Script da Animação Interativa de Partículas de Fundo -->
+  <script>
+    const canvas = document.getElementById('bgCanvas');
+    const ctx = canvas.getContext('2d');
+
+    function resizeCanvas() {
+      canvas.width = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resizeCanvas);
+    resizeCanvas();
+
+    let mouse = { x: null, y: null, radius: 120 };
+    window.addEventListener('mousemove', (e) => {
+      mouse.x = e.clientX;
+      mouse.y = e.clientY;
+    });
+    window.addEventListener('mouseleave', () => {
+      mouse.x = null;
+      mouse.y = null;
+    });
+    window.addEventListener('touchmove', (e) => {
+      if (e.touches.length > 0) {
+        mouse.x = e.touches[0].clientX;
+        mouse.y = e.touches[0].clientY;
+      }
+    });
+
+    class Particle {
+      constructor() {
+        this.x = Math.random() * canvas.width;
+        this.y = Math.random() * canvas.height;
+        this.vx = (Math.random() - 0.5) * 1.2;
+        this.vy = (Math.random() - 0.5) * 1.2;
+        this.radius = Math.random() * 2 + 1;
+      }
+      update() {
+        this.x += this.vx;
+        this.y += this.vy;
+
+        if (this.x < 0 || this.x > canvas.width) this.vx *= -1;
+        if (this.y < 0 || this.y > canvas.height) this.vy *= -1;
+
+        if (mouse.x !== null && mouse.y !== null) {
+          let dx = mouse.x - this.x;
+          let dy = mouse.y - this.y;
+          let dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < mouse.radius) {
+            let angle = Math.atan2(dy, dx);
+            this.x -= Math.cos(angle) * 1.5;
+            this.y -= Math.sin(angle) * 1.5;
+          }
+        }
+      }
+      draw() {
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(56, 189, 248, 0.6)';
+        ctx.fill();
+      }
+    }
+
+    const particleCount = Math.min(window.innerWidth > 768 ? 70 : 35, 100);
+    const particles = [];
+    for (let i = 0; i < particleCount; i++) {
+      particles.push(new Particle());
+    }
+
+    function animate() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      for (let i = 0; i < particles.length; i++) {
+        particles[i].update();
+        particles[i].draw();
+
+        for (let j = i + 1; j < particles.length; j++) {
+          let dx = particles[i].x - particles[j].x;
+          let dy = particles[i].y - particles[j].y;
+          let dist = Math.sqrt(dx * dx + dy * dy);
+
+          if (dist < 130) {
+            ctx.beginPath();
+            ctx.moveTo(particles[i].x, particles[i].y);
+            ctx.lineTo(particles[j].x, particles[j].y);
+            ctx.strokeStyle = `rgba(56, 189, 248, ${0.25 * (1 - dist / 130)})`;
+            ctx.lineWidth = 0.8;
+            ctx.stroke();
+          }
+        }
+      }
+      requestAnimationFrame(animate);
+    }
+    animate();
+  </script>
+
+  <!-- Script Principal da Aplicação -->
+  <script type="module" src="js/main.js"></script>
 </body>
 </html>
