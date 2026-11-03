@@ -13,6 +13,9 @@ export function calendario() {
     turnoVisualizacaoAtivo = isAdminOrAmbos ? "manhã" : turnoUser;
   }
 
+  const keyHorarios = TABELAS_HORARIOS["6_7"] ? "6_7" : Object.keys(TABELAS_HORARIOS)[0];
+  const listaAulasHorario = TABELAS_HORARIOS[keyHorarios] || [];
+
   document.getElementById("main").innerHTML = `
     <div class="head">
       <div>
@@ -38,7 +41,7 @@ export function calendario() {
     <div class="card" style="margin-bottom: 12px; padding: 12px;">
       <h3 style="margin-bottom: 8px; font-size: 12px;">📊 Legenda da Régua por Aula (${turnoVisualizacaoAtivo.toUpperCase()})</h3>
       <div style="display: flex; gap: 4px; flex-wrap: wrap;">
-        ${TABELAS_HORARIOS["6_7"].map((aula) => `
+        ${listaAulasHorario.map((aula) => `
           <div style="background: rgba(255,255,255,0.05); padding: 3px 6px; border-radius: 4px; border: 1px solid var(--border); font-size: 10px;">
             <b>${aula.label}:</b> ${aula.start}–${aula.end}
           </div>
@@ -47,12 +50,11 @@ export function calendario() {
     </div>
 
     <div class="card" style="padding: 10px;">
-      <!-- Contentor com scroll horizontal suave para evitar corte e estouro no mobile -->
       <div class="calendar-grid-container" style="width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch;">
-        <div style="display: grid; grid-template-columns: repeat(7, 52px); gap: 5px; text-align:center; font-weight:bold; font-size:11px; margin-bottom:8px; color:var(--text-muted); width: max-content; min-width: 100%;">
+        <div class="calendar-header">
           <div>Dom</div><div>Seg</div><div>Ter</div><div>Qua</div><div>Qui</div><div>Sex</div><div>Sáb</div>
         </div>
-        <div id="monthGrid" style="display: grid; grid-template-columns: repeat(7, 52px); gap: 5px; width: max-content; min-width: 100%;"></div>
+        <div id="monthGrid" class="calendar-grid"></div>
       </div>
     </div>`;
 
@@ -76,7 +78,7 @@ function renderMonthGrid() {
   const titleEl = document.getElementById("calMonthTitle");
   if (titleEl) titleEl.textContent = `${meses[calMonth]} / ${calYear}`;
 
-  const firstDay = new Date(calYear, calMonth, 1).getDay();
+  const firstDay = new Date(calYear, calMonth, 1).getDay(); // 0 = Domingo, 1 = Segunda, etc.
   const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
   const todayStr = new Date().toISOString().split('T')[0];
 
@@ -84,33 +86,42 @@ function renderMonthGrid() {
   const isAdminOrAmbos = user.role === "admin" || turnoUser === "ambos";
   const turnoAlvo = isAdminOrAmbos ? (turnoVisualizacaoAtivo || "manhã") : turnoUser;
 
+  const keyHorarios = TABELAS_HORARIOS["6_7"] ? "6_7" : Object.keys(TABELAS_HORARIOS)[0];
+  const totalAulas = (TABELAS_HORARIOS[keyHorarios] || []).length || 7;
+
   let html = "";
+  
+  // Preenche os espaços vazios antes do dia 1 para alinhar na coluna correta da semana
   for (let i = 0; i < firstDay; i++) {
-    html += `<div style="width: 52px; height: 85px; background:rgba(255,255,255,0.01); border-radius:8px;"></div>`;
+    html += `<div class="calendar-day-card" style="visibility:hidden; height:85px;"></div>`;
   }
 
   for (let d = 1; d <= daysInMonth; d++) {
     const dateStr = `${calYear}-${String(calMonth + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-    const isWk = window.isWeekend ? window.isWeekend(dateStr) : false;
+    const dayOfWeek = new Date(calYear, calMonth, d).getDay();
+    const isWk = window.isWeekend ? window.isWeekend(dateStr) : (dayOfWeek === 0 || dayOfWeek === 6);
     const isPast = dateStr < todayStr;
     
     // Filtra bloqueios considerando o turno ativo
-    const bloqDia = (window.db.bloqueios || []).filter(b => b.date === dateStr);
+    const bloqDia = (window.db?.bloqueios || []).filter(b => b.date === dateStr);
     const temBloqueioTotal = bloqDia.some(b => b.lesson === "all" || b.tipo === "total");
     const temBloqueioTurno = bloqDia.some(b => b.lesson === `turno_${turnoAlvo}` || b.tipo === turnoAlvo);
     const bloqueioEfetivo = temBloqueioTotal || temBloqueioTurno;
 
     // Filtra empréstimos estritamente pelo turno ativo
-    const emprestimosDia = (window.db.emprestimos || []).filter(r => r.date === dateStr && r.status !== "cancelado" && (r.turno === turnoAlvo || (!r.turno && turnoAlvo === "manhã")));
+    const emprestimosDia = (window.db?.emprestimos || []).filter(r => 
+      r && r.date === dateStr && r.status !== "cancelado" && 
+      (r.turno === turnoAlvo || (!r.turno && turnoAlvo === "manhã"))
+    );
 
-    const ocupacaoPorAula = [0, 0, 0, 0, 0, 0, 0];
-    const lotesPorAula = Array.from({ length: 7 }, () => new Map());
+    const ocupacaoPorAula = Array(totalAulas).fill(0);
+    const lotesPorAula = Array.from({ length: totalAulas }, () => new Map());
 
     emprestimosDia.forEach(emp => {
       const bid = emp.batchId || emp.idDoc || emp.id;
       const qtdDoc = Math.max(emp.qtdTotalPedida || 0, emp.qtdPedida || 0, emp.quantity || 1);
 
-      for (let idx = 0; idx < 7; idx++) {
+      for (let idx = 0; idx < totalAulas; idx++) {
         const temAula = (emp.lessonIndexes && emp.lessonIndexes.includes(idx)) || (emp.lessonIndex === idx);
         if (temAula) {
           lotesPorAula[idx].set(bid, qtdDoc);
@@ -118,7 +129,7 @@ function renderMonthGrid() {
       }
     });
 
-    for (let idx = 0; idx < 7; idx++) {
+    for (let idx = 0; idx < totalAulas; idx++) {
       let soma = 0;
       lotesPorAula[idx].forEach(q => soma += q);
       ocupacaoPorAula[idx] = soma;
@@ -145,7 +156,7 @@ function renderMonthGrid() {
     }
 
     html += `
-      <div class="cal-day-cell" style="width: 52px; min-width: 52px; border:1px solid var(--border); border-radius:8px; padding:4px; height:85px; display:flex; flex-direction:column; justify-content:space-between; cursor:pointer; box-sizing:border-box; ${extraStyle}" onclick="window.clickCalDay('${dateStr}', '${turnoAlvo}')">
+      <div class="calendar-day-card" style="height:85px; display:flex; flex-direction:column; justify-content:space-between; cursor:pointer; box-sizing:border-box; padding:4px; ${extraStyle}" onclick="window.clickCalDay('${dateStr}', '${turnoAlvo}')">
         <div style="display:flex; justify-content:space-between; align-items:center;">
           <b style="font-size:11px; ${isPast ? 'color:var(--text-muted);' : ''}">${d}</b>
           ${bloqueioEfetivo ? `<span class="badge blocked" style="background:#ef4444; color:#fff; font-size:8px; padding:1px 3px;">Bloq.</span>` : (totalMaquinasUnicas > 0 ? `<span class="badge active" style="background:${turnoAlvo === 'tarde' ? '#eab308' : '#3b82f6'}; color:#0f172a; font-weight:bold; font-size:8px; padding:1px 3px;">${totalMaquinasUnicas}m</span>` : '')}
@@ -184,10 +195,11 @@ function renderMonthGrid() {
 }
 
 window.clickCalDay = function(dateStr, turnoAlvo) {
-  const isWk = window.isWeekend ? window.isWeekend(dateStr) : false;
+  const dayOfWeek = new Date(dateStr + 'T00:00:00').getDay();
+  const isWk = dayOfWeek === 0 || dayOfWeek === 6;
   if (isWk) return;
 
-  const bloqDia = (window.db.bloqueios || []).filter(b => b.date === dateStr);
+  const bloqDia = (window.db?.bloqueios || []).filter(b => b.date === dateStr);
   const bloqueioEfetivo = bloqDia.some(b => b.lesson === "all" || b.tipo === "total" || b.lesson === `turno_${turnoAlvo}` || b.tipo === turnoAlvo);
   
   if (bloqueioEfetivo && user.role !== "admin") {
