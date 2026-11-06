@@ -273,21 +273,24 @@ main.main-content {
   box-sizing: border-box;
 }
 
-/* 3. BARRA INFERIOR FIXA (MENU DE NAVEGAÇÃO) */
+/* 3. BARRA INFERIOR FLUTUANTE (Navegação Mobile Otimizada) */
 .bottom-nav-bar {
   position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  height: 58px;
+  bottom: 25px; /* Sobe exatamente 1 a 2 cm para escapar da barra de gestos do iPhone */
+  left: 16px;
+  right: 16px;
+  height: 60px;
   background: rgba(7, 9, 19, 0.95);
-  backdrop-filter: blur(12px);
-  border-top: 1px solid var(--border);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--border);
+  border-radius: 16px; /* Transforma num menu flutuante elegante */
   display: flex;
   justify-content: center;
   align-items: center;
-  padding: 0 16px;
+  padding: 0 12px;
   z-index: 200;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
 }
 
 .nav-bar {
@@ -464,9 +467,14 @@ th {
     padding: 0 12px;
   }
 
-  main.main-content {
-    padding: 60px 6px 76px 6px;
-  }
+ main.main-content {
+  flex: 1;
+  padding: 68px 12px 105px 12px; /* Espaço inferior ampliado para acomodar a barra flutuante */
+  max-width: 1400px;
+  width: 100%;
+  margin: 0 auto;
+  box-sizing: border-box;
+}
 
   .card {
     padding: 12px 8px;

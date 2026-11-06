@@ -2,55 +2,65 @@ import { firestore, user } from './auth.js';
 import { TABELAS_HORARIOS_MANHA, TABELAS_HORARIOS_TARDE } from './config.js';
 
 export function bloqueios() {
-  const listaBloqueios = window.db?.bloqueios || [];
+  if (window.mostrarLoader) window.mostrarLoader("A carregar bloqueios...");
 
-  document.getElementById("main").innerHTML = `
-    <div class="head">
-      <div>
-        <h2>Gestão de Bloqueios por Turno e Aula</h2>
-        <div class="muted">Controlo granular de indisponibilidade de horários</div>
-      </div>
-      <div>
-        <button class="btn-primary btn-sm" onclick="window.modalSalvarBloqueio()">+ Novo Bloqueio</button>
-      </div>
-    </div>
+  try {
+    const listaBloqueios = window.db?.bloqueios || [];
 
-    <div class="card">
-      <div class="table-container">
-        <table>
-          <thead>
-            <tr>
-              <th>DATA</th>
-              <th>TURNO / AULA</th>
-              <th>MOTIVO</th>
-              <th>AÇÕES</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${listaBloqueios.length ? listaBloqueios.map(b => {
-              let badgeHtml = '<span class="badge" style="background:#ef4444; color:#fff;">Dia Inteiro</span>';
-              if (b.lesson !== "all") {
-                const [turno, aulaIdx] = b.lesson.split("_");
-                const nomeTurno = turno === "manha" ? "☀️ Manhã" : "🌙 Tarde";
-                const numAula = Number(aulaIdx) + 1;
-                badgeHtml = `<span class="badge active">${nomeTurno} - ${numAula}ª Aula</span>`;
-              }
-              return `
-                <tr>
-                  <td><b>${b.date ? b.date.split('-').reverse().join('/') : ''}</b></td>
-                  <td>${badgeHtml}</td>
-                  <td>${window.esc ? window.esc(b.motivo || b.reason || 'Sem motivo') : ''}</td>
-                  <td>
-                    <button class="btn-sm danger" onclick="window.excluirBloqueio('${b.idDoc || b.id}')">🗑️ Eliminar</button>
-                  </td>
-                </tr>
-              `;
-            }).join("") : `<tr><td colspan="4" style="text-align:center;" class="muted">Nenhum bloqueio registado.</td></tr>`}
-          </tbody>
-        </table>
+    document.getElementById("main").innerHTML = `
+      <div class="head">
+        <div>
+          <h2>Gestão de Bloqueios por Turno e Aula</h2>
+          <div class="muted">Controlo granular de indisponibilidade de horários</div>
+        </div>
+        <div>
+          <button class="btn-primary btn-sm" onclick="window.modalSalvarBloqueio()">+ Novo Bloqueio</button>
+        </div>
       </div>
-    </div>
-  `;
+
+      <div class="card">
+        <div class="table-container">
+          <table>
+            <thead>
+              <tr>
+                <th>DATA</th>
+                <th>TURNO / AULA</th>
+                <th>MOTIVO</th>
+                <th>AÇÕES</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${listaBloqueios.length ? listaBloqueios.map(b => {
+                let badgeHtml = '<span class="badge" style="background:#ef4444; color:#fff;">Dia Inteiro</span>';
+                if (b.lesson && b.lesson !== "all") {
+                  const partes = b.lesson.split("_");
+                  const turno = partes[0];
+                  const aulaIdx = Number(partes[1]);
+                  const nomeTurno = turno === "manha" ? "☀️ Manhã" : "🌙 Tarde";
+                  const numAula = aulaIdx + 1;
+                  badgeHtml = `<span class="badge active">${nomeTurno} - ${numAula}ª Aula</span>`;
+                }
+                return `
+                  <tr>
+                    <td><b>${b.date ? b.date.split('-').reverse().join('/') : ''}</b></td>
+                    <td>${badgeHtml}</td>
+                    <td>${window.esc ? window.esc(b.motivo || b.reason || 'Sem motivo') : ''}</td>
+                    <td>
+                      <button class="btn-sm danger" onclick="window.excluirBloqueio('${b.idDoc || b.id}')">🗑️ Eliminar</button>
+                    </td>
+                  </tr>
+                `;
+              }).join("") : `<tr><td colspan="4" style="text-align:center;" class="muted">Nenhum bloqueio registado.</td></tr>`}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    `;
+  } finally {
+    if (window.esconderLoader) {
+      setTimeout(() => window.esconderLoader(), 150);
+    }
+  }
 }
 
 window.modalSalvarBloqueio = function() {
@@ -77,9 +87,9 @@ window.modalSalvarBloqueio = function() {
           <div style="background:rgba(59,130,246,0.05); padding:10px; border-radius:6px; border:1px solid var(--border);">
             <div style="font-weight:bold; font-size:12px; margin-bottom:6px; color:#38bdf8;">☀️ Período da Manhã (Aulas Específicas)</div>
             <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:6px;">
-              ${TABELAS_HORARIOS_MANHA.map(a => `
+              ${TABELAS_HORARIOS_MANHA.map((a, idx) => `
                 <label style="display:flex; align-items:center; gap:4px; font-size:11px; cursor:pointer;">
-                  <input type="checkbox" class="chk-aula-bloq" value="manha_${a.index}"> ${a.label}
+                  <input type="checkbox" class="chk-aula-bloq" value="manha_${idx}"> ${a.label}
                 </label>
               `).join('')}
             </div>
@@ -89,9 +99,9 @@ window.modalSalvarBloqueio = function() {
           <div style="background:rgba(234,179,8,0.05); padding:10px; border-radius:6px; border:1px solid var(--border);">
             <div style="font-weight:bold; font-size:12px; margin-bottom:6px; color:#facc15;">🌙 Período da Tarde (Aulas Específicas)</div>
             <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:6px;">
-              ${TABELAS_HORARIOS_TARDE.map(a => `
+              ${TABELAS_HORARIOS_TARDE.map((a, idx) => `
                 <label style="display:flex; align-items:center; gap:4px; font-size:11px; cursor:pointer;">
-                  <input type="checkbox" class="chk-aula-bloq" value="tarde_${a.index}"> ${a.label}
+                  <input type="checkbox" class="chk-aula-bloq" value="tarde_${idx}"> ${a.label}
                 </label>
               `).join('')}
             </div>
@@ -125,30 +135,44 @@ window.modalSalvarBloqueio = function() {
 
     if (!date) return alert("Selecione a data.");
 
+    if (window.mostrarLoader) window.mostrarLoader("A guardar bloqueios...");
+
+    if (!window.db) window.db = {};
+    if (!window.db.bloqueios) window.db.bloqueios = [];
+
     try {
       if (diaInteiro) {
         const newId = '_' + Math.random().toString(36).substr(2, 9);
-        await firestore.collection("bloqueios").doc(newId).set({
+        const novoBloqueio = {
           id: newId,
+          idDoc: newId,
           date,
           lesson: "all",
           motivo,
           createdBy: user?.name || "Admin"
-        });
+        };
+        await firestore.collection("bloqueios").doc(newId).set(novoBloqueio);
+        window.db.bloqueios.push(novoBloqueio);
       } else {
-        const chkAulas = m.querySelectorAll(".chk-aula-bloq:checked");
-        if (chkAulas.length === 0) return alert("Selecione pelo menos uma aula específica ou marque 'Bloquear Dia Inteiro'.");
+        const chkAulas = Array.from(m.querySelectorAll(".chk-aula-bloq:checked"));
+        if (chkAulas.length === 0) {
+          if (window.esconderLoader) window.esconderLoader();
+          return alert("Selecione pelo menos uma aula específica ou marque 'Bloquear Dia Inteiro'.");
+        }
 
         for (let chk of chkAulas) {
-          const lessonVal = chk.value; // ex: "manha_2" ou "tarde_0"
+          const lessonVal = String(chk.value); // Garante a string no formato exato "manha_5"
           const newId = '_' + Math.random().toString(36).substr(2, 9);
-          await firestore.collection("bloqueios").doc(newId).set({
+          const novoBloqueio = {
             id: newId,
+            idDoc: newId,
             date,
             lesson: lessonVal,
             motivo,
             createdBy: user?.name || "Admin"
-          });
+          };
+          await firestore.collection("bloqueios").doc(newId).set(novoBloqueio);
+          window.db.bloqueios.push(novoBloqueio);
         }
       }
 
@@ -156,13 +180,26 @@ window.modalSalvarBloqueio = function() {
       m.remove();
       window.nav("bloqueios");
     } catch (err) {
+      console.error("Erro ao guardar bloqueio:", err);
       alert("Erro ao salvar: " + err.message);
+    } finally {
+      if (window.esconderLoader) window.esconderLoader();
     }
   };
 };
 
 window.excluirBloqueio = async function(idDoc) {
   if (!confirm("Deseja realmente remover este bloqueio?")) return;
-  await firestore.collection("bloqueios").doc(idDoc).delete();
-  window.nav("bloqueios");
+  if (window.mostrarLoader) window.mostrarLoader("A remover bloqueio...");
+  try {
+    await firestore.collection("bloqueios").doc(idDoc).delete();
+    if (window.db?.bloqueios) {
+      window.db.bloqueios = window.db.bloqueios.filter(b => (b.idDoc || b.id) !== idDoc);
+    }
+    window.nav("bloqueios");
+  } catch (err) {
+    alert("Erro ao excluir: " + err.message);
+  } finally {
+    if (window.esconderLoader) window.esconderLoader();
+  }
 };

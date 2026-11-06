@@ -130,7 +130,6 @@ export function solicitacoes() {
 
     document.getElementById("btnFiltrarAulaAtual").onclick = () => {
       document.getElementById("filterData").value = new Date().toISOString().split("T")[0];
-      // Usa a função robusta do config.js com o turno adequado
       const turnoAtual = turnoUser === "ambos" ? "manhã" : turnoUser;
       const aulaAtualIdx = window.obterIndiceAulaAtual ? window.obterIndiceAulaAtual(turnoAtual) : 0;
       trigger(aulaAtualIdx);
@@ -188,8 +187,10 @@ function renderizarCardsSolicitacoes(query = "", filterProf = "todos", filterDat
     else if (x.lesson) groups[bid].lessons.add(x.lesson);
 
     if (x.lessonIndexes && Array.isArray(x.lessonIndexes)) {
-      x.lessonIndexes.forEach(idx => groups[bid].lessonIndexes.add(Number(idx)));
-    } else if (x.lessonIndex !== undefined) {
+      x.lessonIndexes.forEach(idx => {
+        if (idx !== null && idx !== undefined) groups[bid].lessonIndexes.add(Number(idx));
+      });
+    } else if (x.lessonIndex !== undefined && x.lessonIndex !== null) {
       groups[bid].lessonIndexes.add(Number(x.lessonIndex));
     }
 
@@ -204,7 +205,9 @@ function renderizarCardsSolicitacoes(query = "", filterProf = "todos", filterDat
   
   if (filterAulaIdx !== null && filterAulaIdx !== undefined) {
     const idxNum = Number(filterAulaIdx);
-    list = list.filter(g => Array.from(g.lessonIndexes).some(i => Number(i) === idxNum));
+    list = list.filter(g => {
+      return Array.from(g.lessonIndexes).some(i => Number(i) === idxNum);
+    });
   }
 
   if (filterStatus !== "todos") list = list.filter(g => g.status === filterStatus);
@@ -312,10 +315,15 @@ window.executarAcaoEmLote = async function(acao) {
         for (let d of itens) {
           await firestore.collection("emprestimos").doc(d.idDoc).delete();
         }
+        if (window.db?.emprestimos) {
+          window.db.emprestimos = window.db.emprestimos.filter(x => !selecionados.includes(x.batchId || x.idDoc || x.id));
+        }
       } else if (acao === "devolver") {
         const dataDevolucao = window.nowFormatted();
         for (let target of itens) {
           await firestore.collection("emprestimos").doc(target.idDoc).update({ status: "devolvido" });
+          target.status = "devolvido";
+          
           const eqList = target.equipments || (target.equipment ? [target.equipment] : []);
           const validEqs = eqList.filter(x => x && x !== "Pendente");
           const labelAulas = target.lessons ? target.lessons.join(", ") : (target.lesson || "—");
@@ -478,18 +486,41 @@ window.modalReserva = function(defaultDate = "", turnoForcado = null) {
 
     if (!selectedLessons.length) return alert("Selecione pelo menos uma aula.");
 
+    // TRAVA DE VERIFICAÇÃO DE BLOQUEIOS NO BANCO
+    const bloqueiosExistentes = window.db?.bloqueios || [];
+    const prefixoTurno = isTarde ? "tarde" : "manha";
+
+    for (let lIdx of selectedLessons) {
+      const slot = tabelasHorarios[lIdx];
+      const nomeAula = slot ? slot.label : `Aula ${lIdx + 1}`;
+
+      const diaInteiroBloqueado = bloqueiosExistentes.some(b => b.date === d && b.lesson === "all");
+      const chaveAulaBloqueada = `${prefixoTurno}_${lIdx}`;
+      const aulaBloqueada = bloqueiosExistentes.some(b => b.date === d && b.lesson === chaveAulaBloqueada);
+
+      if (diaInteiroBloqueado || aulaBloqueada) {
+        if (window.esconderLoader) window.esconderLoader();
+        return alert(`🔒 A ${nomeAula} (${turnoLabel}) do dia ${d.split('-').reverse().join('/')} está BLOQUEADA pela administração e não pode ser reservada.`);
+      }
+    }
+
     if (window.mostrarLoader) window.mostrarLoader("A criar solicitação...");
 
     const batchId = window.uid();
     const horaCriacao = window.nowFormatted();
 
+    if (!window.db) window.db = {};
+    if (!window.db.emprestimos) window.db.emprestimos = [];
+
     try {
       for (let lIdx of selectedLessons) {
         const slot = tabelasHorarios[lIdx];
         const nomeAula = slot ? slot.label : `Aula ${lIdx + 1}`;
+        const newIdDoc = window.uid();
 
-        await firestore.collection("emprestimos").add({
-          id: window.uid(),
+        const novoItem = {
+          id: newIdDoc,
+          idDoc: newIdDoc,
           batchId: batchId,
           userId: user.id || user.idDoc,
           userName: user.name,
@@ -505,7 +536,10 @@ window.modalReserva = function(defaultDate = "", turnoForcado = null) {
           purpose: purp,
           status: "aguardando",
           createdAt: horaCriacao
-        });
+        };
+
+        await firestore.collection("emprestimos").doc(newIdDoc).set(novoItem);
+        window.db.emprestimos.push(novoItem);
       }
 
       alert("Solicitação criada com sucesso!");
@@ -532,13 +566,13 @@ window.modalAtribuirPorAula = function(batchId) {
   if (!aulasSelecionadas.length) aulasSelecionadas = [0];
 
   const tabelaUsada = isTarde ? TABELAS_HORARIOS_TARDE : TABELAS_HORARIOS_MANHA;
-  let aulaAtivaIdx = aulasSelecionadas[0];
+  let aulaAtivaIdx = Number(aulasSelecionadas[0]);
 
   let atribuicoesPorAula = {};
-  aulasSelecionadas.forEach(idx => { atribuicoesPorAula[idx] = []; });
+  aulasSelecionadas.forEach(idx => { atribuicoesPorAula[Number(idx)] = []; });
 
   itens.forEach(x => {
-    const lIdx = x.lessonIndex !== undefined ? x.lessonIndex : aulasSelecionadas[0];
+    const lIdx = x.lessonIndex !== undefined ? Number(x.lessonIndex) : Number(aulasSelecionadas[0]);
     if (x.equipments && Array.isArray(x.equipments)) {
       x.equipments.forEach(eq => {
         if (eq && eq !== "Pendente" && !atribuicoesPorAula[lIdx]?.includes(eq)) {
@@ -565,9 +599,9 @@ window.modalAtribuirPorAula = function(batchId) {
     <label class="lbl"><b>ESCOLHA A AULA:</b></label>
     <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:12px;">
       ${aulasSelecionadas.map(idx => {
-        const slot = tabelaUsada[idx];
-        const nomeAula = slot ? slot.label : `Aula ${idx+1}`;
-        const isActive = idx === aulaAtivaIdx;
+        const slot = tabelaUsada[Number(idx)];
+        const nomeAula = slot ? slot.label : `Aula ${Number(idx)+1}`;
+        const isActive = Number(idx) === aulaAtivaIdx;
         return `
           <button type="button" class="btn-secondary btn-sm btn-aula-tab ${isActive ? 'active' : ''}" data-aula="${idx}" style="${isActive ? 'background:var(--primary); color:#fff; border-color:var(--primary);' : ''}">
             ${nomeAula}
@@ -696,14 +730,24 @@ window.modalAtribuirPorAula = function(batchId) {
         await firestore.collection("emprestimos").doc(target.idDoc).delete();
       }
 
-      for (let lIdx of aulasSelecionadas) {
-        const slot = tabelaUsada[lIdx];
-        const nomeAulaLabel = slot ? slot.label : `Aula ${lIdx + 1}`;
-        const listaEqsAula = atribuicoesPorAula[lIdx] && atribuicoesPorAula[lIdx].length > 0 ? atribuicoesPorAula[lIdx] : ["Pendente"];
-        const statusAula = listaEqsAula.includes("Pendente") ? "aguardando" : "retirado";
+      if (window.db?.emprestimos) {
+        window.db.emprestimos = window.db.emprestimos.filter(x => (x.batchId || x.idDoc || x.id) !== batchId);
+      } else {
+        window.db = window.db || {};
+        window.db.emprestimos = [];
+      }
 
-        await firestore.collection("emprestimos").add({
-          id: window.uid(),
+      for (let lIdx of aulasSelecionadas) {
+        const numIdx = Number(lIdx);
+        const slot = tabelaUsada[numIdx];
+        const nomeAulaLabel = slot ? slot.label : `Aula ${numIdx + 1}`;
+        const listaEqsAula = atribuicoesPorAula[numIdx] && atribuicoesPorAula[numIdx].length > 0 ? atribuicoesPorAula[numIdx] : ["Pendente"];
+        const statusAula = listaEqsAula.includes("Pendente") ? "aguardando" : "retirado";
+        const newIdDoc = window.uid();
+
+        const novoObjeto = {
+          id: newIdDoc,
+          idDoc: newIdDoc,
           batchId: batchId,
           userId: itemPrincipal.userId,
           userName: itemPrincipal.userName,
@@ -711,8 +755,8 @@ window.modalAtribuirPorAula = function(batchId) {
           tipoEquipamento: itemPrincipal.tipoEquipamento || "notebook",
           date: itemPrincipal.date,
           lessons: [nomeAulaLabel],
-          lessonIndexes: [lIdx],
-          lessonIndex: lIdx,
+          lessonIndexes: [numIdx],
+          lessonIndex: numIdx,
           segment: itemPrincipal.segment || "1º A",
           equipments: listaEqsAula,
           equipment: listaEqsAula[0],
@@ -720,13 +764,17 @@ window.modalAtribuirPorAula = function(batchId) {
           purpose: itemPrincipal.purpose || "outros",
           status: statusAula,
           createdAt: itemPrincipal.createdAt || window.nowFormatted()
-        });
+        };
+
+        await firestore.collection("emprestimos").doc(newIdDoc).set(novoObjeto);
+        window.db.emprestimos.push(novoObjeto);
       }
 
       alert("Atribuições salvas com sucesso!");
       window.fecharModalSeguro();
       window.nav("solicitacoes");
     } catch (err) {
+      console.error("Erro ao atribuir:", err);
       alert("Erro ao salvar: " + err.message);
     } finally {
       if (window.esconderLoader) window.esconderLoader();
@@ -785,6 +833,9 @@ window.modalEditarReserva = function(batchId) {
           date: novaData,
           qtdTotalPedida: novaQtd
         });
+        target.tipoEquipamento = novoTipo;
+        target.date = novaData;
+        target.qtdTotalPedida = novaQtd;
       }
       alert("Solicitação atualizada!");
       window.fecharModalSeguro();
@@ -809,6 +860,7 @@ window.devolverLoteComRegistro = async function(batchId) {
   try {
     for (let target of itens) {
       await firestore.collection("emprestimos").doc(target.idDoc).update({ status: "devolvido" });
+      target.status = "devolvido";
 
       const eqList = target.equipments || (target.equipment ? [target.equipment] : []);
       const validEqs = eqList.filter(x => x && x !== "Pendente");
@@ -843,6 +895,9 @@ window.cancelarLote = async function(batchId) {
       const itens = (window.db?.emprestimos || []).filter(x => (x.batchId || x.idDoc || x.id) === batchId);
       for (let d of itens) {
         await firestore.collection("emprestimos").doc(d.idDoc).delete();
+      }
+      if (window.db?.emprestimos) {
+        window.db.emprestimos = window.db.emprestimos.filter(x => (x.batchId || x.idDoc || x.id) !== batchId);
       }
       alert("Solicitação excluída com sucesso!");
       window.nav("solicitacoes");
